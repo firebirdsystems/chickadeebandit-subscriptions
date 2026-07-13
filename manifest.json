@@ -1,0 +1,35 @@
+{
+  "id": "subscriptions",
+  "name": "Subscriptions & Bills",
+  "version": "1.0.0",
+  "description": "One shared list of everything the household pays for on repeat — streaming, software, memberships, utilities — with renewal countdowns and a real monthly total.",
+  "entrypoint": "index.html",
+  "runtime": "static",
+  "category": "family",
+  "tags": ["subscriptions", "bills", "money", "renewals", "budget"],
+  "icon": "💳",
+  "data_access": {
+    "reads": ["family.members"],
+    "writes": []
+  },
+  "permissions": {
+    "default_audience": "everyone",
+    "requires_approval": false
+  },
+  "storage": "db",
+  "db_plaintext_columns": ["billing_period", "next_renewal_date"],
+  "row_policies": {
+    "subscriptions": {
+      "kind": "adult_writable"
+    }
+  },
+  "nav": { "label": "Subscriptions" },
+  "resource_limits": {
+    "max_db_bytes": 52428800
+  },
+  "ai_access": {
+    "allowed": true,
+    "mode": "read",
+    "db_exports": ["active_subscriptions"]
+  }
+}

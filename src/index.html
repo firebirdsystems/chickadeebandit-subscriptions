@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Subscriptions & Bills</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg: var(--hub-bg, #f9fafb);
+      --surface: var(--hub-surface, #ffffff);
+      --border: var(--hub-border, #e5e7eb);
+      --border-mid: var(--hub-border, #d1d5db);
+      --text: var(--hub-text, #111827);
+      --muted: var(--hub-text-muted, #6b7280);
+      --accent: var(--hub-primary, #111827);
+      --accent-hover: var(--hub-primary-hover, #374151);
+      --accent-fg: var(--hub-primary-fg, #ffffff);
+      --radius: var(--hub-radius, 10px);
+      --green: #047857; --green-soft: #d1fae5;
+      --amber: #b45309; --amber-soft: #fef3c7;
+      --red: #b91c1c; --red-soft: #fee2e2;
+      --blue: #1d4ed8; --blue-soft: #dbeafe;
+      --shadow: 0 1px 3px rgba(15, 23, 42, .07);
+    }
+    body {
+      min-height: 100vh; background: var(--bg); color: var(--text);
+      font-family: var(--hub-font, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
+      font-size: var(--hub-font-size, 15px); line-height: 1.5;
+    }
+    .app { max-width: 720px; margin: 0 auto; padding: 16px; }
+    .topbar { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+    h1 { font-size: 1.35rem; line-height: 1.2; }
+    h2 { font-size: .95rem; }
+    .muted { color: var(--muted); }
+    .tiny { font-size: .78rem; }
+    .stack { display: grid; gap: 8px; }
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+      border: 1px solid transparent; border-radius: 8px; padding: 8px 12px;
+      font: inherit; font-size: .86rem; font-weight: 700; cursor: pointer;
+      min-height: 38px; background: var(--accent); color: var(--accent-fg);
+    }
+    .btn:hover { background: var(--accent-hover); }
+    .btn:disabled { opacity: .48; cursor: default; }
+    .btn-ghost { background: transparent; color: var(--text); border-color: var(--border-mid); }
+    .btn-ghost:hover { background: rgba(127,127,127,.08); }
+    .btn-danger { background: var(--red-soft); color: var(--red); }
+    .btn-sm { min-height: 31px; padding: 5px 10px; font-size: .78rem; }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); padding: 14px; }
+    .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 14px; }
+    .stat { display: grid; gap: 1px; padding: 10px 12px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
+    .stat .v { font-size: 1.1rem; font-weight: 800; }
+    .stat .k { color: var(--muted); font-size: .7rem; text-transform: uppercase; letter-spacing: .05em; font-weight: 800; }
+    .row {
+      display: flex; align-items: center; gap: 11px; padding: 10px 12px;
+      background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow);
+    }
+    .row.cancelled { opacity: .55; }
+    .row-icon { font-size: 1.15rem; width: 30px; text-align: center; flex-shrink: 0; }
+    .row-body { flex: 1; min-width: 0; }
+    .row-title { font-weight: 750; font-size: .92rem; }
+    .row-meta { color: var(--muted); font-size: .78rem; }
+    .row-side { flex-shrink: 0; text-align: right; display: grid; gap: 3px; justify-items: end; }
+    .amount { font-weight: 800; font-size: .92rem; }
+    .pill {
+      display: inline-flex; align-items: center; min-height: 20px; padding: 1px 8px;
+      border-radius: 999px; white-space: nowrap; background: #f1f5f9; color: var(--muted);
+      font-size: .72rem; font-weight: 800;
+    }
+    .pill.soon { background: var(--red-soft); color: var(--red); }
+    .pill.week { background: var(--amber-soft); color: var(--amber); }
+    .edit-link { background: none; border: 0; color: var(--muted); cursor: pointer; font-size: .76rem; font-weight: 700; padding: 2px 4px; }
+    .edit-link:hover { color: var(--text); text-decoration: underline; }
+    .section-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 18px 2px 8px; }
+    .empty { color: var(--muted); text-align: center; padding: 30px 16px; }
+    .error { background: var(--red-soft); color: var(--red); padding: 9px 12px; border-radius: 8px; margin-bottom: 10px; font-size: .86rem; }
+    .overlay { position: fixed; inset: 0; background: rgba(0,0,0,.42); z-index: 100; display: flex; align-items: center; justify-content: center; padding: 16px; }
+    .modal { background: var(--surface); border-radius: 14px; padding: 22px; width: 100%; max-width: 460px; box-shadow: 0 20px 60px rgba(0,0,0,.25); max-height: 92vh; overflow-y: auto; }
+    .modal h2 { font-size: 1.05rem; margin-bottom: 16px; }
+    .form { display: grid; gap: 12px; }
+    .field { display: grid; gap: 5px; }
+    .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    label { font-size: .74rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); font-weight: 800; }
+    input, select, textarea {
+      width: 100%; border: 1.5px solid var(--border-mid); border-radius: 8px;
+      padding: 9px 11px; font: inherit; background: var(--surface); color: var(--text);
+    }
+    textarea { min-height: 56px; resize: vertical; }
+    input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); }
+    .modal-actions { display: flex; gap: 8px; margin-top: 6px; justify-content: flex-end; }
+    .modal-left { margin-right: auto; }
+    @media (max-width: 520px) { .grid2 { grid-template-columns: 1fr; } .stats { grid-template-columns: 1fr 1fr; } }
+  </style>
+  <base href="/run/subscriptions/">
+</head>
+<body>
+<div class="app">
+  <div id="root" class="empty">Loading…</div>
+</div>
+
+<script type="module">
+import { esc, isAdult, hubConfirm, fmtMoney } from "/hub-sdk.js";
+import {
+  CATEGORIES, PERIODS, categoryMeta, periodMeta, totalMonthlyCents,
+  totalYearlyCents, sortedSubscriptions, renewalLabel, advanceRenewal, parseMoneyToCents,
+} from "./logic.js";
+
+const CONTEXT = window.__CONTEXT_URL ?? "";
+const DB = window.__DB_URL ?? "";
+const HUB_MEMBER = window.__CURRENT_MEMBER ?? null;
+
+let members = [];
+let memberMap = new Map();
+let me = null;
+let subs = [];
+let error = "";
+let modalEl = null;
+
+function nowIso() { return new Date().toISOString(); }
+function canManage() { return !!me && isAdult(me); }
+function memberName(id) { return memberMap.get(id)?.name ?? ""; }
+
+/* ── DB helper ─────────────────────────────────────────────────────────────── */
+async function db(sql, params = []) {
+  if (!DB) return { rows: [] };
+  const res = await fetch(DB, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sql, params }),
+  });
+  const json = await res.json();
+  if (json.error) throw new Error(json.error);
+  return json;
+}
+
+/* ── Loading ───────────────────────────────────────────────────────────────── */
+async function loadMembers() {
+  if (!CONTEXT) {
+    members = [{ id: "demo-1", name: "Alex", role: "adult" }, { id: "demo-2", name: "Jordan", role: "adult" }];
+  } else {
+    try {
+      const res = await fetch(`${CONTEXT}?keys=family.members`);
+      members = ((await res.json())["family.members"]) ?? [];
+    } catch { members = []; }
+  }
+  memberMap = new Map(members.map((m) => [m.id, m]));
+  me = HUB_MEMBER ?? members[0] ?? { id: "guest", name: "Guest", role: "adult" };
+}
+
+async function loadSubs() {
+  if (!DB) {
+    subs = [
+      { id: "d1", name: "Netflix", category: "streaming", amount_cents: 1549, billing_period: "monthly", next_renewal_date: "2026-07-20", payer_id: "demo-1", status: "active", url: "", notes: "", created_by: "demo-1", created_at: nowIso(), updated_at: nowIso() },
+      { id: "d2", name: "Gym", category: "memberships", amount_cents: 4500, billing_period: "monthly", next_renewal_date: "2026-07-14", payer_id: "demo-2", status: "active", url: "", notes: "", created_by: "demo-2", created_at: nowIso(), updated_at: nowIso() },
+      { id: "d3", name: "1Password", category: "software", amount_cents: 5988, billing_period: "yearly", next_renewal_date: "2026-11-02", payer_id: "demo-1", status: "active", url: "", notes: "", created_by: "demo-1", created_at: nowIso(), updated_at: nowIso() },
+    ];
+    return;
+  }
+  const res = await db("SELECT id, name, category, amount_cents, billing_period, next_renewal_date, payer_id, status, url, notes, created_by, created_at, updated_at FROM app_subscriptions__subscriptions");
+  subs = res.rows ?? [];
+}
+
+async function refresh() {
+  error = "";
+  try {
+    await Promise.all([loadMembers(), loadSubs()]);
+    render();
+  } catch (e) { error = e.message; render(); }
+}
+
+function showError(msg) { error = msg; render(); }
+
+/* ── Mutations ─────────────────────────────────────────────────────────────── */
+async function saveSub(fields, existingId) {
+  const now = nowIso();
+  if (existingId) {
+    const idx = subs.findIndex((s) => s.id === existingId);
+    const prev = idx !== -1 ? subs[idx] : null;
+    if (idx !== -1) subs[idx] = { ...subs[idx], ...fields, updated_at: now };
+    closeModal(); render();
+    try {
+      await db(
+        "UPDATE app_subscriptions__subscriptions SET name=?, category=?, amount_cents=?, billing_period=?, next_renewal_date=?, payer_id=?, status=?, url=?, notes=?, updated_at=? WHERE id=?",
+        [fields.name, fields.category, fields.amount_cents, fields.billing_period, fields.next_renewal_date, fields.payer_id, fields.status, fields.url, fields.notes, now, existingId],
+      );
+    } catch (e) { if (idx !== -1 && prev) subs[idx] = prev; showError(e.message); }
+  } else {
+    const row = { id: crypto.randomUUID(), ...fields, created_by: me.id, created_at: now, updated_at: now };
+    subs = [...subs, row];
+    closeModal(); render();
+    try {
+      await db(
+        "INSERT INTO app_subscriptions__subscriptions (id, name, category, amount_cents, billing_period, next_renewal_date, payer_id, status, url, notes, created_by, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        [row.id, row.name, row.category, row.amount_cents, row.billing_period, row.next_renewal_date, row.payer_id, row.status, row.url, row.notes, row.created_by, now, now],
+      );
+    } catch (e) { subs = subs.filter((s) => s.id !== row.id); showError(e.message); }
+  }
+}
+
+async function deleteSub(id) {
+  const ok = await hubConfirm({ message: "Delete this subscription?", confirmLabel: "Delete", destructive: true });
+  if (!ok) return;
+  const prev = subs;
+  subs = subs.filter((s) => s.id !== id);
+  closeModal(); render();
+  try { await db("DELETE FROM app_subscriptions__subscriptions WHERE id = ?", [id]); }
+  catch (e) { subs = prev; showError(e.message); }
+}
+
+/** Roll an overdue/current renewal forward one period (adults only). */
+async function markRenewed(id) {
+  const idx = subs.findIndex((s) => s.id === id);
+  if (idx === -1) return;
+  const sub = subs[idx];
+  const nextDate = advanceRenewal(sub.next_renewal_date, sub.billing_period);
+  const now = nowIso();
+  const prev = sub;
+  subs[idx] = { ...sub, next_renewal_date: nextDate, updated_at: now };
+  render();
+  try {
+    await db("UPDATE app_subscriptions__subscriptions SET next_renewal_date=?, updated_at=? WHERE id=?", [nextDate, now, id]);
+  } catch (e) { subs[idx] = prev; showError(e.message); }
+}
+
+/* ── Rendering ─────────────────────────────────────────────────────────────── */
+function pillClass(days) {
+  if (days == null) return "";
+  if (days <= 3) return "soon";
+  if (days <= 14) return "week";
+  return "";
+}
+
+function renderSub(s) {
+  const cat = categoryMeta(s.category);
+  const per = periodMeta(s.billing_period);
+  const payer = memberName(s.payer_id);
+  const cancelled = s.status === "cancelled";
+  return `
+    <div class="row ${cancelled ? "cancelled" : ""}">
+      <div class="row-icon" aria-hidden="true">${cat.icon}</div>
+      <div class="row-body">
+        <div class="row-title">${esc(s.name)}</div>
+        <div class="row-meta">
+          ${esc(cat.label)} · ${esc(per.label.toLowerCase())}${payer ? ` · ${esc(payer)} pays` : ""}${s.notes ? ` · ${esc(s.notes)}` : ""}
+        </div>
+      </div>
+      <div class="row-side">
+        <span class="amount">${esc(fmtMoney(Number(s.amount_cents)))}<span class="muted tiny">/${esc(per.value === "monthly" ? "mo" : per.value === "yearly" ? "yr" : "wk")}</span></span>
+        ${cancelled ? `<span class="pill">Cancelled</span>` : `<span class="pill ${pillClass(s._days)}">${esc(renewalLabel(s._days))}</span>`}
+        ${canManage() ? `
+          <span>
+            ${!cancelled && s._days != null && s._days <= 0 ? `<button class="edit-link" data-renewed="${esc(s.id)}">Mark renewed</button>` : ""}
+            <button class="edit-link" data-edit="${esc(s.id)}">Edit</button>
+          </span>` : ""}
+      </div>
+    </div>`;
+}
+
+function render() {
+  const root = document.getElementById("root");
+  root.className = "app-root";
+  const list = sortedSubscriptions(subs);
+  const active = subs.filter((s) => s.status === "active");
+  root.innerHTML = `
+    <div class="topbar">
+      <div>
+        <h1>Subscriptions & Bills</h1>
+        <p class="muted tiny">Everything the household pays for on repeat.</p>
+      </div>
+      ${canManage() ? `<button class="btn" data-add>+ Add</button>` : ""}
+    </div>
+    ${error ? `<div class="error">${esc(error)}</div>` : ""}
+    <div class="stats">
+      <div class="stat"><span class="v">${esc(fmtMoney(totalMonthlyCents(subs)))}</span><span class="k">Per month</span></div>
+      <div class="stat"><span class="v">${esc(fmtMoney(totalYearlyCents(subs)))}</span><span class="k">Per year</span></div>
+      <div class="stat"><span class="v">${active.length}</span><span class="k">Active</span></div>
+    </div>
+    ${list.length
+      ? `<div class="stack">${list.map(renderSub).join("")}</div>`
+      : `<div class="card empty">Nothing tracked yet${canManage() ? " — add your first subscription" : ""}.</div>`}
+    ${!canManage() && list.length ? `<p class="muted tiny" style="margin-top:10px">Only adults can edit this list.</p>` : ""}
+  `;
+}
+
+/* ── Modal ─────────────────────────────────────────────────────────────────── */
+function openModal(html) {
+  closeModal();
+  modalEl = document.createElement("div");
+  modalEl.className = "overlay";
+  modalEl.innerHTML = `<div class="modal">${html}</div>`;
+  modalEl.addEventListener("click", (e) => { if (e.target === modalEl) closeModal(); });
+  document.body.appendChild(modalEl);
+}
+function closeModal() { modalEl?.remove(); modalEl = null; }
+
+function openEditor(existing) {
+  const s = existing ?? null;
+  const catOptions = CATEGORIES.map((c) => `<option value="${c.value}" ${s?.category === c.value ? "selected" : ""}>${c.icon} ${c.label}</option>`).join("");
+  const perOptions = PERIODS.map((p) => `<option value="${p.value}" ${(s?.billing_period ?? "monthly") === p.value ? "selected" : ""}>${p.label}</option>`).join("");
+  const payerOptions = [`<option value="">—</option>`, ...members.map((m) => `<option value="${esc(m.id)}" ${s?.payer_id === m.id ? "selected" : ""}>${esc(m.name)}</option>`)].join("");
+  openModal(`
+    <h2>${s ? "Edit subscription" : "Add subscription"}</h2>
+    <form class="form" id="sub-form">
+      <div class="field"><label for="f-name">Name</label><input id="f-name" data-autofocus value="${esc(s?.name ?? "")}" placeholder="Netflix" required /></div>
+      <div class="grid2">
+        <div class="field"><label for="f-cat">Category</label><select id="f-cat">${catOptions}</select></div>
+        <div class="field"><label for="f-period">Billing</label><select id="f-period">${perOptions}</select></div>
+      </div>
+      <div class="grid2">
+        <div class="field"><label for="f-amount">Amount</label><input id="f-amount" inputmode="decimal" value="${s?.amount_cents != null ? esc((Number(s.amount_cents) / 100).toFixed(2)) : ""}" placeholder="15.49" required /></div>
+        <div class="field"><label for="f-next">Next renewal</label><input id="f-next" type="date" value="${esc(s?.next_renewal_date ?? "")}" required /></div>
+      </div>
+      <div class="grid2">
+        <div class="field"><label for="f-payer">Who pays</label><select id="f-payer">${payerOptions}</select></div>
+        <div class="field"><label for="f-status">Status</label>
+          <select id="f-status">
+            <option value="active" ${(s?.status ?? "active") === "active" ? "selected" : ""}>Active</option>
+            <option value="cancelled" ${s?.status === "cancelled" ? "selected" : ""}>Cancelled</option>
+          </select>
+        </div>
+      </div>
+      <div class="field"><label for="f-url">Manage / cancel link <span class="muted" style="text-transform:none">(optional)</span></label><input id="f-url" value="${esc(s?.url ?? "")}" placeholder="https://…" /></div>
+      <div class="field"><label for="f-notes">Notes</label><textarea id="f-notes">${esc(s?.notes ?? "")}</textarea></div>
+      <div class="modal-actions">
+        ${s ? `<button type="button" class="btn btn-danger modal-left" data-delete="${esc(s.id)}">Delete</button>` : ""}
+        <button type="button" class="btn btn-ghost" data-cancel>Cancel</button>
+        <button type="submit" class="btn">${s ? "Save" : "Add"}</button>
+      </div>
+    </form>`);
+  modalEl.querySelector("[data-autofocus]")?.focus();
+  modalEl.querySelector("#sub-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const name = document.getElementById("f-name").value.trim();
+    if (!name) { document.getElementById("f-name").focus(); return; }
+    const cents = parseMoneyToCents(document.getElementById("f-amount").value);
+    if (cents == null) { showError("Amount must be a dollar amount like 15.49."); return; }
+    const nextDate = document.getElementById("f-next").value;
+    if (!nextDate) { document.getElementById("f-next").focus(); return; }
+    const btn = modalEl?.querySelector('button[type="submit"]');
+    if (btn) { btn.disabled = true; btn.textContent = "Saving…"; }
+    saveSub({
+      name,
+      category: document.getElementById("f-cat").value,
+      amount_cents: cents,
+      billing_period: document.getElementById("f-period").value,
+      next_renewal_date: nextDate,
+      payer_id: document.getElementById("f-payer").value,
+      status: document.getElementById("f-status").value,
+      url: document.getElementById("f-url").value.trim(),
+      notes: document.getElementById("f-notes").value.trim(),
+    }, s?.id ?? null).catch((err) => showError(err.message));
+  });
+}
+
+/* ── Events ────────────────────────────────────────────────────────────────── */
+document.addEventListener("click", (e) => {
+  const t = e.target.closest("button");
+  if (!t) return;
+  if (t.hasAttribute("data-add")) { openEditor(null); return; }
+  if (t.hasAttribute("data-edit")) { openEditor(subs.find((s) => s.id === t.getAttribute("data-edit"))); return; }
+  if (t.hasAttribute("data-cancel")) { closeModal(); return; }
+  if (t.hasAttribute("data-delete")) { deleteSub(t.getAttribute("data-delete")); return; }
+  if (t.hasAttribute("data-renewed")) { markRenewed(t.getAttribute("data-renewed")).catch((err) => showError(err.message)); return; }
+});
+
+refresh();
+</script>
+</body>
+</html>
