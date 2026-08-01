@@ -18,6 +18,18 @@
   },
   "storage": "db",
   "db_plaintext_columns": ["billing_period", "next_renewal_date"],
+    "member_references": {
+      "subscriptions": [
+        {
+          "column": "created_by",
+          "on_removed": "keep"
+        },
+        {
+          "column": "payer_id",
+          "on_removed": "keep"
+        }
+      ]
+    },
   "row_policies": {
     "subscriptions": {
       "kind": "adult_writable"

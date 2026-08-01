@@ -119,7 +119,12 @@ let modalEl = null;
 
 function nowIso() { return new Date().toISOString(); }
 function canManage() { return !!me && isAdult(me); }
-function memberName(id) { return memberMap.get(id)?.name ?? ""; }
+// payer_id is NOT NULL with '' as the "no payer recorded" sentinel, so
+// member_references can only "keep" it — a "null" would abort roster removal and
+// a "delete" would drop a household subscription because one member left. A
+// set-but-unresolvable id is a departed payer and says so; editing the
+// subscription re-selects "—" and clears it.
+function memberName(id) { return id ? (memberMap.get(id)?.name ?? "Former member") : ""; }
 
 /* ── DB helper ─────────────────────────────────────────────────────────────── */
 async function db(sql, params = []) {
