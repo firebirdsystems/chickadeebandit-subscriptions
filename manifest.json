@@ -36,6 +36,21 @@
     }
   },
   "nav": { "label": "Subscriptions" },
+  "agenda": {
+    "kind": "reminder",
+    "label": "Renews today",
+    "source": {
+      "kind": "sql",
+      "query": "SELECT id AS id, name AS title, NULLIF(billing_period, '') AS subtitle, next_renewal_date AS when_at, NULLIF(payer_id, '') AS member_id FROM app_subscriptions__subscriptions WHERE status = 'active' AND next_renewal_date = :today ORDER BY created_at LIMIT 20"
+    }
+  },
+  "glance": {
+    "source": {
+      "kind": "sql",
+      "query": "SELECT name AS title, billing_period AS subtitle, next_renewal_date AS renews_on, NULLIF(payer_id, '') AS payer FROM app_subscriptions__subscriptions WHERE status = 'active' AND next_renewal_date >= :today ORDER BY next_renewal_date LIMIT 3"
+    },
+    "display": { "template": "list", "title": "title", "subtitle": "subtitle", "when": "renews_on", "owner": "payer" }
+  },
   "resource_limits": {
     "max_db_bytes": 52428800
   },
