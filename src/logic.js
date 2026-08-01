@@ -125,3 +125,13 @@ export function parseMoneyToCents(raw) {
   const [whole, frac = ""] = s.split(".");
   return Number(whole) * 100 + Number((frac + "00").slice(0, 2));
 }
+
+/**
+ * Fields the in-app search matches against (see hub-sdk `searchMatch`).
+ * Category and notes count as well as the name — "which streaming
+ * ones renew in March" is a category question, and the account or
+ * cancellation detail lives in the notes.
+ */
+export function searchableFields(item) {
+  return [item.name, item.category, item.notes, item.url];
+}

@@ -91,6 +91,13 @@
     .modal-actions { display: flex; gap: 8px; margin-top: 6px; justify-content: flex-end; }
     .modal-left { margin-right: auto; }
     @media (max-width: 520px) { .grid2 { grid-template-columns: 1fr; } .stats { grid-template-columns: 1fr 1fr; } }
+    .search-row { margin-bottom: 12px; }
+    .search-input {
+      width: 100%; border: 1.5px solid var(--border-mid, var(--border, #d1d5db));
+      border-radius: 8px; padding: 9px 11px; font: inherit;
+      background: var(--surface, var(--card, #fff)); color: var(--text, inherit);
+    }
+    .search-input:focus { outline: none; border-color: var(--accent, #6366f1); }
   </style>
   <base href="/run/subscriptions/">
 </head>
@@ -100,10 +107,10 @@
 </div>
 
 <script type="module">
-import { esc, isAdult, hubConfirm, fmtMoney } from "/hub-sdk.js";
+import { esc, isAdult, hubConfirm, fmtMoney, searchMatch } from "/hub-sdk.js";
 import {
   CATEGORIES, PERIODS, categoryMeta, periodMeta, totalMonthlyCents,
-  totalYearlyCents, sortedSubscriptions, renewalLabel, advanceRenewal, parseMoneyToCents,
+  totalYearlyCents, sortedSubscriptions, renewalLabel, advanceRenewal, parseMoneyToCents, searchableFields,
 } from "./logic.js";
 
 const CONTEXT = window.__CONTEXT_URL ?? "";
@@ -114,6 +121,7 @@ let members = [];
 let memberMap = new Map();
 let me = null;
 let subs = [];
+let searchQ = "";       // in-app search (see logic.js searchableFields)
 let error = "";
 let modalEl = null;
 
@@ -262,6 +270,24 @@ function renderSub(s) {
     </div>`;
 }
 
+// Owns the filtering and the empty states, so the keystroke handler can refresh
+// the list without repeating how it is derived.
+function renderSubList() {
+  const list = sortedSubscriptions(subs);
+  const shown = searchQ ? list.filter((s) => searchMatch(searchQ, searchableFields(s))) : list;
+  if (shown.length) return `<div class="stack">${shown.map(renderSub).join("")}</div>`;
+  if (searchQ) return `<div class="card empty">Nothing matches "${esc(searchQ)}".</div>`;
+  return `<div class="card empty">Nothing tracked yet${canManage() ? " — add your first subscription" : ""}.</div>`;
+}
+
+// Re-render only the list on each keystroke so the search box keeps focus.
+document.addEventListener("input", (e) => {
+  if (e.target.id !== "search") return;
+  searchQ = e.target.value;
+  const el = document.getElementById("sub-list");
+  if (el) el.innerHTML = renderSubList();
+});
+
 function render() {
   const root = document.getElementById("root");
   root.className = "app-root";
@@ -281,9 +307,8 @@ function render() {
       <div class="stat"><span class="v">${esc(fmtMoney(totalYearlyCents(subs)))}</span><span class="k">Per year</span></div>
       <div class="stat"><span class="v">${active.length}</span><span class="k">Active</span></div>
     </div>
-    ${list.length
-      ? `<div class="stack">${list.map(renderSub).join("")}</div>`
-      : `<div class="card empty">Nothing tracked yet${canManage() ? " — add your first subscription" : ""}.</div>`}
+    ${list.length ? `<div class="search-row"><input id="search" class="search-input" type="search" placeholder="Search subscriptions…" aria-label="Search subscriptions" value="${esc(searchQ)}" /></div>` : ""}
+    <div id="sub-list">${renderSubList()}</div>
     ${!canManage() && list.length ? `<p class="muted tiny" style="margin-top:10px">Only adults can edit this list.</p>` : ""}
   `;
 }

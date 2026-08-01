@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   categoryMeta, periodMeta, monthlyCostCents, totalMonthlyCents, totalYearlyCents,
-  daysUntilDate, advanceRenewal, renewalLabel, sortedSubscriptions, parseMoneyToCents,
+  daysUntilDate, advanceRenewal, renewalLabel, sortedSubscriptions, parseMoneyToCents, searchableFields,
 } from "../src/logic.js";
 
 const FROM = new Date(2026, 6, 12, 9, 0, 0); // July 12, 2026 local
@@ -81,5 +81,16 @@ describe("meta fallbacks", () => {
   it("unknown category/period fall back safely", () => {
     expect(categoryMeta("bogus").value).toBe("other");
     expect(periodMeta("bogus").value).toBe("monthly");
+  });
+});
+
+describe("searchableFields", () => {
+  it("matches on category and notes, not just the service name", () => {
+    const fields = searchableFields({
+      name: "Streamly", category: "streaming", notes: "shared with Ada, cancel by June",
+      url: "https://streamly.example",
+    });
+    expect(fields).toContain("streaming");
+    expect(fields).toContain("shared with Ada, cancel by June");
   });
 });
