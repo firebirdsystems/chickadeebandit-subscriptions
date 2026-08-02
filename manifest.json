@@ -17,6 +17,56 @@
     "requires_approval": false
   },
   "storage": "db",
+  "automation_actions": {
+    "add_subscription": {
+      "title": "Track a subscription",
+      "description": "Start tracking a recurring cost when another app's event fires — a trial started, a service signed up for, a renewal noticed elsewhere.",
+      "params": {
+        "created_by": {
+          "type": "member",
+          "label": "Added by",
+          "required": true
+        },
+        "name": {
+          "type": "text",
+          "label": "Service name",
+          "required": true
+        },
+        "amount_cents": {
+          "type": "integer",
+          "label": "Amount per period (in cents)",
+          "default": 0,
+          "min": 0
+        },
+        "billing_period": {
+          "type": "text",
+          "label": "Billing period",
+          "default": "monthly",
+          "options": ["weekly", "monthly", "yearly"]
+        }
+      },
+      "dedupe": {
+        "table": "subscriptions",
+        "column": "source_event_id"
+      },
+      "steps": [
+        {
+          "op": "insert",
+          "table": "subscriptions",
+          "values": {
+            "id": "$uuid",
+            "name": ":name",
+            "amount_cents": ":amount_cents",
+            "billing_period": ":billing_period",
+            "created_by": ":created_by",
+            "created_at": "$now",
+            "updated_at": "$now",
+            "source_event_id": "$event_id"
+          }
+        }
+      ]
+    }
+  },
   "db_plaintext_columns": ["billing_period", "next_renewal_date"],
     "member_references": {
       "subscriptions": [
@@ -34,6 +84,10 @@
     "subscriptions": {
       "kind": "adult_writable"
     }
+  },
+  "publishes": ["subscription.added"],
+  "publish_acls": {
+    "subscription.added": { "require_role": "adult" }
   },
   "nav": { "label": "Subscriptions" },
   "agenda": {

@@ -117,6 +117,22 @@ const CONTEXT = window.__CONTEXT_URL ?? "";
 const DB = window.__DB_URL ?? "";
 const HUB_MEMBER = window.__CURRENT_MEMBER ?? null;
 
+const EVENTS = window.__EVENTS_URL ?? "";
+
+async function publishEvent(type, subjectId, payload = {}) {
+  if (!EVENTS) return;
+  try {
+    await fetch(EVENTS, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ type, subject_id: subjectId, payload }),
+    });
+  } catch {
+    // Best-effort: the row is already written, so a failed publish is not fatal.
+  }
+}
+
+
 let members = [];
 let memberMap = new Map();
 let me = null;
@@ -207,6 +223,12 @@ async function saveSub(fields, existingId) {
         "INSERT INTO app_subscriptions__subscriptions (id, name, category, amount_cents, billing_period, next_renewal_date, payer_id, status, url, notes, created_by, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
         [row.id, row.name, row.category, row.amount_cents, row.billing_period, row.next_renewal_date, row.payer_id, row.status, row.url, row.notes, row.created_by, now, now],
       );
+      await publishEvent("subscription.added", row.id, {
+        category: row.category,
+        amount_cents: row.amount_cents,
+        billing_period: row.billing_period,
+        next_renewal_date: row.next_renewal_date,
+      });
     } catch (e) { subs = subs.filter((s) => s.id !== row.id); showError(e.message); }
   }
 }
