@@ -1,0 +1,131 @@
+{
+  "scenarios": [
+    {
+      "name": "an added subscription persists with the reminder date its lead time implies",
+      "members": { "adult": "adult" },
+      "steps": [
+        { "action": "open" },
+
+        { "action": "click", "selector": "[data-testid=\"add-subscription\"]" },
+        { "action": "waitFor", "selector": "[data-testid=\"sub-form\"]" },
+        { "action": "fill", "selector": "[data-testid=\"field-name\"]", "value": "Streamly" },
+        { "action": "fill", "selector": "[data-testid=\"field-amount\"]", "value": "15.49" },
+        { "action": "fill", "selector": "[data-testid=\"field-next-renewal\"]", "value": "2030-06-15" },
+        { "action": "select", "selector": "[data-testid=\"field-lead\"]", "value": "7" },
+        { "action": "click", "selector": "[data-testid=\"sub-submit\"]" },
+        { "action": "waitFor", "selector": "[data-testid=\"sub-form\"]", "state": "detached" },
+
+        { "action": "reload" },
+        { "action": "expectCount", "selector": "[data-testid=\"sub-row\"]", "count": 1 },
+        { "action": "expectText", "text": "Streamly", "selector": "[data-testid=\"sub-list\"]" },
+        {
+          "action": "expectText",
+          "text": "🔔 Jun 8",
+          "selector": "[data-testid=\"sub-meta\"]"
+        },
+
+        { "action": "click", "selector": "[data-testid=\"edit-subscription\"]" },
+        { "action": "waitFor", "selector": "[data-testid=\"sub-form\"]" },
+        { "action": "select", "selector": "[data-testid=\"field-lead\"]", "value": "off" },
+        { "action": "click", "selector": "[data-testid=\"sub-submit\"]" },
+        { "action": "waitFor", "selector": "[data-testid=\"sub-form\"]", "state": "detached" },
+        { "action": "reload" },
+        { "action": "expectNoText", "text": "🔔" }
+      ]
+    },
+    {
+      "name": "a weekly subscription cannot be asked for a week's notice, a monthly one can",
+      "members": { "adult": "adult" },
+      "steps": [
+        { "action": "open" },
+        { "action": "click", "selector": "[data-testid=\"add-subscription\"]" },
+        { "action": "waitFor", "selector": "[data-testid=\"sub-form\"]" },
+
+        { "action": "select", "selector": "[data-testid=\"field-period\"]", "value": "monthly" },
+        {
+          "action": "expectCount",
+          "selector": "[data-testid=\"field-lead\"] option[value=\"7\"]",
+          "count": 1
+        },
+
+        { "action": "select", "selector": "[data-testid=\"field-period\"]", "value": "weekly" },
+        {
+          "action": "expectCount",
+          "selector": "[data-testid=\"field-lead\"] option[value=\"7\"]",
+          "count": 0
+        },
+        {
+          "action": "expectCount",
+          "selector": "[data-testid=\"field-lead\"] option[value=\"5\"]",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "name": "marking a renewal paid clears the overdue prompt for good",
+      "members": { "adult": "adult" },
+      "steps": [
+        {
+          "action": "seedRaw",
+          "sql": "INSERT INTO app_subscriptions__subscriptions (id, name, category, amount_cents, billing_period, next_renewal_date, payer_id, status, url, notes, remind, lead_days, remind_scope, created_by, created_at, updated_at) VALUES ('s-overdue', ?, 'streaming', 1549, 'monthly', date('now','-3 days'), '', 'active', '', '', 1, 7, 'payer', 'seed', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')",
+          "params": ["Overdue Service"]
+        },
+        { "action": "open" },
+        { "action": "expectCount", "selector": "[data-testid=\"mark-renewed\"]", "count": 1 },
+
+        { "action": "click", "selector": "[data-testid=\"mark-renewed\"]" },
+        { "action": "waitFor", "selector": "[data-testid=\"mark-renewed\"]", "state": "detached" },
+
+        { "action": "reload" },
+        { "action": "expectText", "text": "Overdue Service", "selector": "[data-testid=\"sub-list\"]" },
+        { "action": "expectCount", "selector": "[data-testid=\"mark-renewed\"]", "count": 0 }
+      ]
+    },
+    {
+      "name": "toggling a subscription's status and back leaves its reminder alone",
+      "members": { "adult": "adult" },
+      "steps": [
+        {
+          "action": "seedRaw",
+          "sql": "INSERT INTO app_subscriptions__subscriptions (id, name, category, amount_cents, billing_period, next_renewal_date, payer_id, status, url, notes, remind, lead_days, remind_scope, created_by, created_at, updated_at) VALUES ('s-toggle', ?, 'streaming', 1549, 'monthly', '2030-06-15', '', 'active', '', '', 1, 7, 'payer', 'seed', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')",
+          "params": ["Toggle Streaming"]
+        },
+        { "action": "open" },
+        { "action": "expectText", "text": "\ud83d\udd14 Jun 8", "selector": "[data-testid=\"sub-meta\"]" },
+
+        { "action": "click", "selector": "[data-testid=\"edit-subscription\"]" },
+        { "action": "waitFor", "selector": "[data-testid=\"sub-form\"]" },
+
+        { "action": "select", "selector": "[data-testid=\"field-status\"]", "value": "cancelled" },
+        { "action": "select", "selector": "[data-testid=\"field-status\"]", "value": "active" },
+
+        { "action": "click", "selector": "[data-testid=\"sub-submit\"]" },
+        { "action": "waitFor", "selector": "[data-testid=\"sub-form\"]", "state": "detached" },
+        { "action": "reload" },
+
+        { "action": "expectText", "text": "\ud83d\udd14 Jun 8", "selector": "[data-testid=\"sub-meta\"]" }
+      ]
+    },
+    {
+      "name": "a child reads the household's subscriptions but is given no way to change them",
+      "members": { "adult": "adult", "kid": "child" },
+      "steps": [
+        {
+          "action": "seedRaw",
+          "sql": "INSERT INTO app_subscriptions__subscriptions (id, name, category, amount_cents, billing_period, next_renewal_date, payer_id, status, url, notes, remind, lead_days, remind_scope, created_by, created_at, updated_at) VALUES ('s-shared', ?, 'streaming', 1549, 'monthly', '2030-06-15', '', 'active', '', '', 1, 7, 'payer', 'seed', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')",
+          "params": ["Household Streaming"]
+        },
+
+        { "action": "open", "as": "kid" },
+        { "action": "expectText", "text": "Household Streaming", "as": "kid", "selector": "[data-testid=\"sub-list\"]" },
+        { "action": "expectVisible", "selector": "[data-testid=\"read-only-note\"]", "as": "kid" },
+        { "action": "expectCount", "selector": "[data-testid=\"add-subscription\"]", "count": 0, "as": "kid" },
+        { "action": "expectCount", "selector": "[data-testid=\"edit-subscription\"]", "count": 0, "as": "kid" },
+
+        { "action": "open", "as": "adult" },
+        { "action": "expectCount", "selector": "[data-testid=\"add-subscription\"]", "count": 1, "as": "adult" },
+        { "action": "expectCount", "selector": "[data-testid=\"edit-subscription\"]", "count": 1, "as": "adult" }
+      ]
+    }
+  ]
+}

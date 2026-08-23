@@ -109,8 +109,10 @@
 <script type="module">
 import { esc, isAdult, hubConfirm, fmtMoney, searchMatch } from "/hub-sdk.js";
 import {
-  CATEGORIES, PERIODS, categoryMeta, periodMeta, totalMonthlyCents,
+  CATEGORIES, PERIODS, REMIND_SCOPES, DEFAULT_LEAD_DAYS, categoryMeta, periodMeta, totalMonthlyCents,
   totalYearlyCents, sortedSubscriptions, renewalLabel, advanceRenewal, parseMoneyToCents, searchableFields,
+  clampLeadDays, leadChoicesFor, remindOnDate, reviewTitle, reviewSummary, renewalDescription,
+  wantsRenewalNudge, nudgeRetractionReason, shortDate,
 } from "./logic.js";
 
 const CONTEXT = window.__CONTEXT_URL ?? "";
@@ -119,17 +121,22 @@ const HUB_MEMBER = window.__CURRENT_MEMBER ?? null;
 
 const EVENTS = window.__EVENTS_URL ?? "";
 
+/**
+ * Publish an app event. THROWS on a network failure or any non-2xx — a 401 that
+ * looked like a success here would let the app tell the household "saved and
+ * notified" while the calendar entry it promised never existed. Recovery is the
+ * caller's, and every caller goes through publishSafely/announceRenewalSafely,
+ * which turn the throw into a visible "couldn't notify" without disturbing the
+ * row that was already committed.
+ */
 async function publishEvent(type, subjectId, payload = {}) {
   if (!EVENTS) return;
-  try {
-    await fetch(EVENTS, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ type, subject_id: subjectId, payload }),
-    });
-  } catch {
-    // Best-effort: the row is already written, so a failed publish is not fatal.
-  }
+  const res = await fetch(EVENTS, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ type, subject_id: subjectId, payload }),
+  });
+  if (!res.ok) throw new Error(`Publish failed (${res.status})`);
 }
 
 
@@ -137,6 +144,7 @@ let members = [];
 let memberMap = new Map();
 let me = null;
 let subs = [];
+let reminderStatus = null; // { entitled, missing_capabilities, bundle } | null (demo / old hub / fetch failed)
 let searchQ = "";       // in-app search (see logic.js searchableFields)
 let error = "";
 let modalEl = null;
@@ -180,20 +188,34 @@ async function loadMembers() {
 async function loadSubs() {
   if (!DB) {
     subs = [
-      { id: "d1", name: "Netflix", category: "streaming", amount_cents: 1549, billing_period: "monthly", next_renewal_date: "2026-07-20", payer_id: "demo-1", status: "active", url: "", notes: "", created_by: "demo-1", created_at: nowIso(), updated_at: nowIso() },
-      { id: "d2", name: "Gym", category: "memberships", amount_cents: 4500, billing_period: "monthly", next_renewal_date: "2026-07-14", payer_id: "demo-2", status: "active", url: "", notes: "", created_by: "demo-2", created_at: nowIso(), updated_at: nowIso() },
-      { id: "d3", name: "1Password", category: "software", amount_cents: 5988, billing_period: "yearly", next_renewal_date: "2026-11-02", payer_id: "demo-1", status: "active", url: "", notes: "", created_by: "demo-1", created_at: nowIso(), updated_at: nowIso() },
+      { id: "d1", name: "Netflix", category: "streaming", amount_cents: 1549, billing_period: "monthly", next_renewal_date: "2026-07-20", payer_id: "demo-1", status: "active", url: "", notes: "", remind: 1, lead_days: 7, remind_scope: "payer", last_reminded_at: null, created_by: "demo-1", created_at: nowIso(), updated_at: nowIso() },
+      { id: "d2", name: "Gym", category: "memberships", amount_cents: 4500, billing_period: "monthly", next_renewal_date: "2026-07-14", payer_id: "demo-2", status: "active", url: "", notes: "", remind: 0, lead_days: 7, remind_scope: "payer", last_reminded_at: null, created_by: "demo-2", created_at: nowIso(), updated_at: nowIso() },
+      { id: "d3", name: "1Password", category: "software", amount_cents: 5988, billing_period: "yearly", next_renewal_date: "2026-11-02", payer_id: "demo-1", status: "active", url: "", notes: "", remind: 1, lead_days: 14, remind_scope: "household", last_reminded_at: null, created_by: "demo-1", created_at: nowIso(), updated_at: nowIso() },
     ];
     return;
   }
-  const res = await db("SELECT id, name, category, amount_cents, billing_period, next_renewal_date, payer_id, status, url, notes, created_by, created_at, updated_at FROM app_subscriptions__subscriptions");
+  const res = await db("SELECT id, name, category, amount_cents, billing_period, next_renewal_date, payer_id, status, url, notes, remind, lead_days, remind_scope, last_reminded_at, created_by, created_at, updated_at FROM app_subscriptions__subscriptions");
   subs = res.rows ?? [];
+}
+
+/** Whether the hub cron will actually EMAIL renewal reminders for this
+ *  household. The calendar half of a nudge is free (it rides an automation
+ *  rule on the event this app publishes); the email half is the premium
+ *  date_reminders protocol, and this endpoint is the only honest way to say
+ *  which the household has. Non-fatal: demo mode and older hubs just skip it. */
+async function loadReminderStatus() {
+  reminderStatus = null;
+  if (!DB) return;
+  try {
+    const res = await fetch("api/reminders-status");
+    if (res.ok) reminderStatus = await res.json();
+  } catch { /* leave null — the UI simply says less */ }
 }
 
 async function refresh() {
   error = "";
   try {
-    await Promise.all([loadMembers(), loadSubs()]);
+    await Promise.all([loadMembers(), loadSubs(), loadReminderStatus()]);
     render();
   } catch (e) { error = e.message; render(); }
 }
@@ -201,35 +223,167 @@ async function refresh() {
 function showError(msg) { error = msg; render(); }
 
 /* ── Mutations ─────────────────────────────────────────────────────────────── */
+
+/**
+ * Announce that a renewal is coming, so an automation rule can act on it — the
+ * shipped suggestion turns this into an all-day calendar entry on `remind_on`.
+ *
+ * Fires when the date is SET or MOVES, not on the reminder day itself: this app
+ * is a static page with no cron of its own.
+ *
+ * Every publish carries the same `source_ref_id`, and the calendar's
+ * `upsert_dated_event` action conflicts on it, so re-announcing MOVES the entry
+ * already on the calendar rather than adding one beside it. Editing a renewal
+ * date or widening a lead time therefore leaves exactly one entry, on the right
+ * day. (The calendar used to also expose an insert-only action keyed on the
+ * event id — fresh every publish, so it could never move or remove what it had
+ * made. It was removed rather than deprecated: it was the obvious pick, and it
+ * only misbehaves on the SECOND publish, so it tested clean.)
+ *
+ * The reverse — switching the reminder off, cancelling, deleting — publishes
+ * `subscription.renewal_cancelled` with the SAME source_ref_id, which a rule
+ * turns into the calendar's `retract_dated_event`. See retractRenewalNudge.
+ */
+async function announceUpcomingRenewal(sub) {
+  if (!wantsRenewalNudge(sub)) return;
+  const remindOn = remindOnDate(sub.next_renewal_date, sub.lead_days, sub.billing_period);
+  if (!remindOn) return;
+  await publishEvent("subscription.renewal_upcoming", sub.id, {
+    // Steady identity for the calendar entry this nudge becomes. The event id
+    // changes on every publish, so it can only say "this is a fresh event", not
+    // "this is the same subscription as last time" — which is why an edited
+    // renewal used to land a SECOND entry beside the stale first one. Namespaced
+    // by app because the key shares a column with every other publisher's.
+    source_ref_id: `subscriptions:${sub.id}`,
+    name: sub.name,
+    renewal_date: sub.next_renewal_date,
+    remind_on: remindOn,
+    review_title: reviewTitle(sub),
+    summary: reviewSummary(sub, fmtMoney),
+    amount_cents: Number(sub.amount_cents),
+    billing_period: sub.billing_period,
+    payer_id: sub.payer_id || undefined,
+    category: sub.category,
+  });
+}
+
+/**
+ * Publish without letting the failure reach a caller that would undo a
+ * committed write. Every publish in this app is a side effect ON a row that is
+ * already saved: an automation rule missing its trigger is a lesser harm than
+ * the row disappearing from the list. Surfaced, not swallowed silently.
+ */
+async function publishSafely(type, entityId, payload) {
+  try { await publishEvent(type, entityId, payload); }
+  catch { error = "Saved. Couldn't notify other apps — the calendar entry may be missing."; render(); }
+}
+
+async function announceRenewalSafely(sub) {
+  try { await announceUpcomingRenewal(sub); }
+  catch { error = "Saved. Couldn't notify other apps — the calendar entry may be missing."; render(); }
+}
+
+/**
+ * Say that an announced nudge no longer applies, so a rule can take the entry
+ * back down. Carries the source_ref_id the announcement used — that is the
+ * whole mechanism: the calendar's retraction is scoped by it, and a mismatch
+ * would silently retract nothing (or, if it collided, someone else's entry).
+ *
+ * Deliberately NOT symmetric with announcing. Announcing is idempotent — the
+ * calendar upserts — so re-announcing is free. A retraction is only published
+ * on a real transition out of "wants a nudge" (see nudgeRetractionReason),
+ * because one that fires on every save would burn an automation run per
+ * keystroke-fix to update zero rows, and rules are rate-limited per day.
+ */
+async function retractRenewalNudge(sub, reason) {
+  await publishEvent("subscription.renewal_cancelled", sub.id, {
+    source_ref_id: `subscriptions:${sub.id}`,
+    name: sub.name,
+    reason,
+  });
+}
+
+async function retractRenewalSafely(sub, reason) {
+  try { await retractRenewalNudge(sub, reason); }
+  catch { error = "Saved. Couldn't notify other apps — the calendar entry may still be showing."; render(); }
+}
+
+/** Announce or retract, whichever this edit calls for. */
+async function syncRenewalNudge(prev, next) {
+  const reason = nudgeRetractionReason(prev, next);
+  if (reason) return retractRenewalSafely(next, reason);
+  return announceRenewalSafely(next);
+}
+
+/** Whether an edit changed anything the nudge is *scheduled* from. Re-announcing
+ *  on every save would put a second calendar entry on the same day for a typo
+ *  fix in the notes.
+ *
+ *  Only fields that move the reminder day, or that decide whether there is a
+ *  reminder at all, belong here. `name` deliberately does NOT: it reaches the
+ *  event as cosmetic text (review_title), and renaming a row to fix a typo
+ *  would otherwise publish a second event for a cycle that already has its
+ *  entry — exactly the duplicate this guard exists to prevent. The rename shows
+ *  up on the next cycle's entry. */
+function nudgeInputsChanged(prev, next) {
+  if (!prev) return true;
+  return ["next_renewal_date", "lead_days", "remind", "billing_period", "status"]
+    .some((k) => String(prev[k] ?? "") !== String(next[k] ?? ""));
+}
+
 async function saveSub(fields, existingId) {
   const now = nowIso();
   if (existingId) {
     const idx = subs.findIndex((s) => s.id === existingId);
-    const prev = idx !== -1 ? subs[idx] : null;
-    if (idx !== -1) subs[idx] = { ...subs[idx], ...fields, updated_at: now };
+    const prev = idx !== -1 ? { ...subs[idx] } : null;
+    // A moved renewal date is a NEW occurrence, so the old one's send stamp must
+    // not carry over. The hub silences a row whose `last_reminded_at` falls
+    // inside the current occurrence's `lead_days + 1` window, so any edit that
+    // shifts the date forward by less than that window leaves last cycle's stamp
+    // sitting inside this one's — and the corrected date is never emailed, with
+    // nothing in the UI to say so. (The calendar half still moves, which makes
+    // the silence look like success.) markRenewed clears the stamp for exactly
+    // this reason; an edit is the other way a date moves. Clearing cannot cause
+    // a duplicate: the hub's per-recipient send log still holds the previous
+    // occurrence. See migration 003.
+    const renewalMoved = !!prev && String(prev.next_renewal_date ?? "") !== String(fields.next_renewal_date ?? "");
+    if (idx !== -1) {
+      subs[idx] = { ...subs[idx], ...fields, updated_at: now };
+      if (renewalMoved) subs[idx].last_reminded_at = null;
+    }
+    const saved = idx !== -1 ? subs[idx] : null;
     closeModal(); render();
     try {
       await db(
-        "UPDATE app_subscriptions__subscriptions SET name=?, category=?, amount_cents=?, billing_period=?, next_renewal_date=?, payer_id=?, status=?, url=?, notes=?, updated_at=? WHERE id=?",
-        [fields.name, fields.category, fields.amount_cents, fields.billing_period, fields.next_renewal_date, fields.payer_id, fields.status, fields.url, fields.notes, now, existingId],
+        `UPDATE app_subscriptions__subscriptions SET name=?, category=?, amount_cents=?, billing_period=?, next_renewal_date=?, payer_id=?, status=?, url=?, notes=?, remind=?, lead_days=?, remind_scope=?, ${renewalMoved ? "last_reminded_at=NULL, " : ""}updated_at=? WHERE id=?`,
+        [fields.name, fields.category, fields.amount_cents, fields.billing_period, fields.next_renewal_date, fields.payer_id, fields.status, fields.url, fields.notes, fields.remind, fields.lead_days, fields.remind_scope, now, existingId],
       );
-    } catch (e) { if (idx !== -1 && prev) subs[idx] = prev; showError(e.message); }
+    } catch (e) { if (idx !== -1 && prev) subs[idx] = prev; showError(e.message); return; }
+    // Outside the rollback: the row is committed, so a failed publish (a 429,
+    // say) must not put the pre-edit values back on screen. The nudge is a
+    // best-effort side effect — announceRenewalSafely says so out loud.
+    if (saved && nudgeInputsChanged(prev, saved)) await syncRenewalNudge(prev, saved);
   } else {
-    const row = { id: crypto.randomUUID(), ...fields, created_by: me.id, created_at: now, updated_at: now };
+    const row = { id: crypto.randomUUID(), ...fields, last_reminded_at: null, created_by: me.id, created_at: now, updated_at: now };
     subs = [...subs, row];
     closeModal(); render();
     try {
       await db(
-        "INSERT INTO app_subscriptions__subscriptions (id, name, category, amount_cents, billing_period, next_renewal_date, payer_id, status, url, notes, created_by, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-        [row.id, row.name, row.category, row.amount_cents, row.billing_period, row.next_renewal_date, row.payer_id, row.status, row.url, row.notes, row.created_by, now, now],
+        "INSERT INTO app_subscriptions__subscriptions (id, name, category, amount_cents, billing_period, next_renewal_date, payer_id, status, url, notes, remind, lead_days, remind_scope, created_by, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        [row.id, row.name, row.category, row.amount_cents, row.billing_period, row.next_renewal_date, row.payer_id, row.status, row.url, row.notes, row.remind, row.lead_days, row.remind_scope, row.created_by, now, now],
       );
-      await publishEvent("subscription.added", row.id, {
-        category: row.category,
-        amount_cents: row.amount_cents,
-        billing_period: row.billing_period,
-        next_renewal_date: row.next_renewal_date,
-      });
-    } catch (e) { subs = subs.filter((s) => s.id !== row.id); showError(e.message); }
+    } catch (e) { subs = subs.filter((s) => s.id !== row.id); showError(e.message); return; }
+    // Same rule as the edit branch, and it matters more here: the INSERT has
+    // committed, so unwinding the local row on a publish failure would hide a
+    // subscription that exists and invite the user to add it a second time.
+    await publishSafely("subscription.added", row.id, {
+      category: row.category,
+      amount_cents: row.amount_cents,
+      billing_period: row.billing_period,
+      next_renewal_date: row.next_renewal_date,
+      name: row.name,
+    });
+    await announceRenewalSafely(row);
   }
 }
 
@@ -237,10 +391,17 @@ async function deleteSub(id) {
   const ok = await hubConfirm({ message: "Delete this subscription?", confirmLabel: "Delete", destructive: true });
   if (!ok) return;
   const prev = subs;
+  // Captured before the local list drops it: the retraction needs the row's
+  // name, and whether it had a calendar entry to retract at all.
+  const doomed = subs.find((s) => s.id === id);
   subs = subs.filter((s) => s.id !== id);
   closeModal(); render();
   try { await db("DELETE FROM app_subscriptions__subscriptions WHERE id = ?", [id]); }
-  catch (e) { subs = prev; showError(e.message); }
+  catch (e) { subs = prev; showError(e.message); return; }
+  // After the DELETE commits, and not before: a retraction published for a row
+  // that then failed to delete would strand the subscription in the list with
+  // its calendar entry already gone.
+  if (doomed && wantsRenewalNudge(doomed)) await retractRenewalSafely(doomed, "deleted");
 }
 
 /** Roll an overdue/current renewal forward one period (adults only). */
@@ -248,14 +409,40 @@ async function markRenewed(id) {
   const idx = subs.findIndex((s) => s.id === id);
   if (idx === -1) return;
   const sub = subs[idx];
-  const nextDate = advanceRenewal(sub.next_renewal_date, sub.billing_period);
+  const paidOn = sub.next_renewal_date;
+  const nextDate = advanceRenewal(paidOn, sub.billing_period);
   const now = nowIso();
   const prev = sub;
-  subs[idx] = { ...sub, next_renewal_date: nextDate, updated_at: now };
+  // last_reminded_at is cleared with the date it belonged to: the hub silences
+  // a row whose stamp sits inside the current occurrence's window, and for a
+  // weekly subscription the previous cycle's stamp does exactly that. The hub's
+  // per-recipient send log still holds the old occurrence, so this can't
+  // resend it — see migration 003.
+  subs[idx] = { ...sub, next_renewal_date: nextDate, last_reminded_at: null, updated_at: now };
+  const renewed = subs[idx];
   render();
   try {
-    await db("UPDATE app_subscriptions__subscriptions SET next_renewal_date=?, updated_at=? WHERE id=?", [nextDate, now, id]);
-  } catch (e) { subs[idx] = prev; showError(e.message); }
+    await db(
+      "UPDATE app_subscriptions__subscriptions SET next_renewal_date=?, last_reminded_at=NULL, updated_at=? WHERE id=?",
+      [nextDate, now, id],
+    );
+  } catch (e) { subs[idx] = prev; showError(e.message); return; }
+
+  // A zero-cost row (a free trial being tracked so it doesn't quietly start
+  // billing) has no charge to book, and budget apps reject a zero transaction.
+  if (Number(sub.amount_cents) > 0) {
+    await publishSafely("subscription.renewed", id, {
+      name: sub.name,
+      amount_cents: Number(sub.amount_cents),
+      paid_on: paidOn,
+      description: renewalDescription(sub),
+      next_renewal_date: nextDate,
+      billing_period: sub.billing_period,
+      payer_id: sub.payer_id || undefined,
+      category: sub.category,
+    });
+  }
+  await announceRenewalSafely(renewed);
 }
 
 /* ── Rendering ─────────────────────────────────────────────────────────────── */
@@ -266,27 +453,37 @@ function pillClass(days) {
   return "";
 }
 
+/** "Nudge Aug 22" — the day this row's reminder is for, so the lead time is
+ *  visible as a date rather than as a setting you have to open the editor to
+ *  read. Empty when the row opted out or has nothing upcoming. */
+function nudgeNote(s) {
+  if (!wantsRenewalNudge(s)) return "";
+  const on = remindOnDate(s.next_renewal_date, s.lead_days, s.billing_period);
+  return on && on !== s.next_renewal_date ? `🔔 ${shortDate(on)}` : "";
+}
+
 function renderSub(s) {
   const cat = categoryMeta(s.category);
   const per = periodMeta(s.billing_period);
   const payer = memberName(s.payer_id);
+  const nudge = nudgeNote(s);
   const cancelled = s.status === "cancelled";
   return `
-    <div class="row ${cancelled ? "cancelled" : ""}">
+    <div class="row ${cancelled ? "cancelled" : ""}" data-testid="sub-row" data-sub-id="${esc(s.id)}">
       <div class="row-icon" aria-hidden="true">${cat.icon}</div>
       <div class="row-body">
-        <div class="row-title">${esc(s.name)}</div>
-        <div class="row-meta">
-          ${esc(cat.label)} · ${esc(per.label.toLowerCase())}${payer ? ` · ${esc(payer)} pays` : ""}${s.notes ? ` · ${esc(s.notes)}` : ""}
+        <div class="row-title" data-testid="sub-name">${esc(s.name)}</div>
+        <div class="row-meta" data-testid="sub-meta">
+          ${esc(cat.label)} · ${esc(per.label.toLowerCase())}${payer ? ` · ${esc(payer)} pays` : ""}${nudge && !cancelled ? ` · ${esc(nudge)}` : ""}${s.notes ? ` · ${esc(s.notes)}` : ""}
         </div>
       </div>
       <div class="row-side">
         <span class="amount">${esc(fmtMoney(Number(s.amount_cents)))}<span class="muted tiny">/${esc(per.value === "monthly" ? "mo" : per.value === "yearly" ? "yr" : "wk")}</span></span>
-        ${cancelled ? `<span class="pill">Cancelled</span>` : `<span class="pill ${pillClass(s._days)}">${esc(renewalLabel(s._days))}</span>`}
+        ${cancelled ? `<span class="pill">Cancelled</span>` : `<span class="pill ${pillClass(s._days)}" data-testid="sub-countdown">${esc(renewalLabel(s._days))}</span>`}
         ${canManage() ? `
           <span>
-            ${!cancelled && s._days != null && s._days <= 0 ? `<button class="edit-link" data-renewed="${esc(s.id)}">Mark renewed</button>` : ""}
-            <button class="edit-link" data-edit="${esc(s.id)}">Edit</button>
+            ${!cancelled && s._days != null && s._days <= 0 ? `<button class="edit-link" data-testid="mark-renewed" data-sub-id="${esc(s.id)}" data-renewed="${esc(s.id)}">Mark renewed</button>` : ""}
+            <button class="edit-link" data-testid="edit-subscription" data-sub-id="${esc(s.id)}" data-edit="${esc(s.id)}">Edit</button>
           </span>` : ""}
       </div>
     </div>`;
@@ -320,8 +517,11 @@ function render() {
       <div>
         <h1>Subscriptions & Bills</h1>
         <p class="muted tiny">Everything the household pays for on repeat.</p>
+        ${reminderStatus && !reminderStatus.entitled
+          ? `<p class="muted tiny">📬 Emailed reminders are part of the ${esc(reminderStatus.bundle ?? "premium")} bundle — countdowns and calendar nudges work either way.</p>`
+          : ""}
       </div>
-      ${canManage() ? `<button class="btn" data-add>+ Add</button>` : ""}
+      ${canManage() ? `<button class="btn" data-testid="add-subscription" data-add>+ Add</button>` : ""}
     </div>
     ${error ? `<div class="error">${esc(error)}</div>` : ""}
     <div class="stats">
@@ -330,8 +530,8 @@ function render() {
       <div class="stat"><span class="v">${active.length}</span><span class="k">Active</span></div>
     </div>
     ${list.length ? `<div class="search-row"><input id="search" class="search-input" type="search" placeholder="Search subscriptions…" aria-label="Search subscriptions" value="${esc(searchQ)}" /></div>` : ""}
-    <div id="sub-list">${renderSubList()}</div>
-    ${!canManage() && list.length ? `<p class="muted tiny" style="margin-top:10px">Only adults can edit this list.</p>` : ""}
+    <div id="sub-list" data-testid="sub-list">${renderSubList()}</div>
+    ${!canManage() && list.length ? `<p class="muted tiny" data-testid="read-only-note" style="margin-top:10px">Only adults can edit this list.</p>` : ""}
   `;
 }
 
@@ -346,41 +546,127 @@ function openModal(html) {
 }
 function closeModal() { modalEl?.remove(); modalEl = null; }
 
+/** The lead-time picker doubles as the on/off switch, so "warn me about this
+ *  one" is a single decision: "No reminder" means remind = 0, any number is a
+ *  lead time with reminding on. Choices are filtered to what the billing period
+ *  can honor (see logic.js maxLeadDays). */
+function leadOptions(s, period) {
+  const per = period ?? s?.billing_period ?? "monthly";
+  const off = s ? Number(s.remind) === 0 : false;
+  const cur = clampLeadDays(s?.lead_days ?? DEFAULT_LEAD_DAYS, per);
+  const label = (d) => (d === 1 ? "1 day before" : d === 7 ? "1 week before" : d === 14 ? "2 weeks before" : `${d} days before`);
+  return [
+    `<option value="off" ${off ? "selected" : ""}>No reminder</option>`,
+    ...leadChoicesFor(per, cur).map((d) => `<option value="${d}" ${!off && d === cur ? "selected" : ""}>${label(d)}</option>`),
+  ].join("");
+}
+
+/** Says which channels a reminder will actually arrive on. The calendar half
+ *  rides an automation rule the household may not have enabled, so this
+ *  promises only what the app knows: the email half's entitlement. */
+function leadNote() {
+  const calendar = "Publishes a reminder other apps can act on — enable the Calendar automation in Settings to see it there.";
+  if (!reminderStatus) return calendar;
+  return reminderStatus.entitled
+    ? `${calendar} Also emailed on the day.`
+    : `${calendar} Email reminders need the ${reminderStatus.bundle ?? "premium"} bundle.`;
+}
+
 function openEditor(existing) {
   const s = existing ?? null;
+  const scopeOptions = REMIND_SCOPES.map((r) => `<option value="${r.value}" ${(s?.remind_scope ?? "payer") === r.value ? "selected" : ""}>${esc(r.label)}</option>`).join("");
   const catOptions = CATEGORIES.map((c) => `<option value="${c.value}" ${s?.category === c.value ? "selected" : ""}>${c.icon} ${c.label}</option>`).join("");
   const perOptions = PERIODS.map((p) => `<option value="${p.value}" ${(s?.billing_period ?? "monthly") === p.value ? "selected" : ""}>${p.label}</option>`).join("");
   const payerOptions = [`<option value="">—</option>`, ...members.map((m) => `<option value="${esc(m.id)}" ${s?.payer_id === m.id ? "selected" : ""}>${esc(m.name)}</option>`)].join("");
   openModal(`
     <h2>${s ? "Edit subscription" : "Add subscription"}</h2>
-    <form class="form" id="sub-form">
-      <div class="field"><label for="f-name">Name</label><input id="f-name" data-autofocus value="${esc(s?.name ?? "")}" placeholder="Netflix" required /></div>
+    <form class="form" id="sub-form" data-testid="sub-form">
+      <div class="field"><label for="f-name">Name</label><input id="f-name" data-testid="field-name" data-autofocus value="${esc(s?.name ?? "")}" placeholder="Netflix" required /></div>
       <div class="grid2">
-        <div class="field"><label for="f-cat">Category</label><select id="f-cat">${catOptions}</select></div>
-        <div class="field"><label for="f-period">Billing</label><select id="f-period">${perOptions}</select></div>
+        <div class="field"><label for="f-cat">Category</label><select id="f-cat" data-testid="field-category">${catOptions}</select></div>
+        <div class="field"><label for="f-period">Billing</label><select id="f-period" data-testid="field-period">${perOptions}</select></div>
       </div>
       <div class="grid2">
-        <div class="field"><label for="f-amount">Amount</label><input id="f-amount" inputmode="decimal" value="${s?.amount_cents != null ? esc((Number(s.amount_cents) / 100).toFixed(2)) : ""}" placeholder="15.49" required /></div>
-        <div class="field"><label for="f-next">Next renewal</label><input id="f-next" type="date" value="${esc(s?.next_renewal_date ?? "")}" required /></div>
+        <div class="field"><label for="f-amount">Amount</label><input id="f-amount" data-testid="field-amount" inputmode="decimal" value="${s?.amount_cents != null ? esc((Number(s.amount_cents) / 100).toFixed(2)) : ""}" placeholder="15.49" required /></div>
+        <div class="field"><label for="f-next">Next renewal</label><input id="f-next" data-testid="field-next-renewal" type="date" value="${esc(s?.next_renewal_date ?? "")}" required /></div>
       </div>
       <div class="grid2">
-        <div class="field"><label for="f-payer">Who pays</label><select id="f-payer">${payerOptions}</select></div>
+        <div class="field"><label for="f-payer">Who pays</label><select id="f-payer" data-testid="field-payer">${payerOptions}</select></div>
         <div class="field"><label for="f-status">Status</label>
-          <select id="f-status">
+          <select id="f-status" data-testid="field-status">
             <option value="active" ${(s?.status ?? "active") === "active" ? "selected" : ""}>Active</option>
             <option value="cancelled" ${s?.status === "cancelled" ? "selected" : ""}>Cancelled</option>
           </select>
         </div>
       </div>
+      <div class="grid2">
+        <div class="field"><label for="f-lead">Remind before it renews</label><select id="f-lead" data-testid="field-lead">${leadOptions(s)}</select></div>
+        <div class="field"><label for="f-scope">Email goes to</label><select id="f-scope" data-testid="field-scope">${scopeOptions}</select></div>
+      </div>
+      <p class="muted tiny" id="lead-note" style="margin-top:-4px">${esc(leadNote())}</p>
       <div class="field"><label for="f-url">Manage / cancel link <span class="muted" style="text-transform:none">(optional)</span></label><input id="f-url" value="${esc(s?.url ?? "")}" placeholder="https://…" /></div>
       <div class="field"><label for="f-notes">Notes</label><textarea id="f-notes">${esc(s?.notes ?? "")}</textarea></div>
       <div class="modal-actions">
-        ${s ? `<button type="button" class="btn btn-danger modal-left" data-delete="${esc(s.id)}">Delete</button>` : ""}
-        <button type="button" class="btn btn-ghost" data-cancel>Cancel</button>
-        <button type="submit" class="btn">${s ? "Save" : "Add"}</button>
+        ${s ? `<button type="button" class="btn btn-danger modal-left" data-testid="sub-delete" data-delete="${esc(s.id)}">Delete</button>` : ""}
+        <button type="button" class="btn btn-ghost" data-testid="sub-cancel" data-cancel>Cancel</button>
+        <button type="submit" class="btn" data-testid="sub-submit">${s ? "Save" : "Add"}</button>
       </div>
     </form>`);
   modalEl.querySelector("[data-autofocus]")?.focus();
+  // A weekly subscription can't be warned about a week ahead, so the lead
+  // choices depend on the period — rebuild them when it changes rather than
+  // letting the user pick a value that would be silently clamped on save.
+  // Cancelling a subscription turns its reminder off, visibly: the picker is
+  // the only place `remind` is set, so leaving it enabled would let the form
+  // say "1 week before" for a row the app will never nudge about.
+  //
+  // Forcing "off" is one-way on its own, and that loses a decision the user
+  // never revisited: flipping status to Cancelled and back — a mis-click, or
+  // reactivating a service mid-edit — would leave the picker reading "No
+  // reminder", save remind = 0, and publish a retraction that takes the
+  // calendar entry down. Nothing on screen would say the reminder had been
+  // dropped. So the pre-cancel choice is stashed and put back on the way out.
+  let leadBeforeCancel = null;
+  const syncLeadToStatus = () => {
+    const leadEl = modalEl?.querySelector("#f-lead");
+    const statusEl = modalEl?.querySelector("#f-status");
+    if (!leadEl || !statusEl) return;
+    const cancelled = statusEl.value === "cancelled";
+    if (cancelled) {
+      // Only on the way IN, so a second call (the period handler rebuilds the
+      // options and re-syncs) can't overwrite the stash with the forced "off".
+      if (leadBeforeCancel === null) leadBeforeCancel = leadEl.value;
+      leadEl.value = "off";
+    } else if (leadBeforeCancel !== null) {
+      const restored = leadBeforeCancel;
+      leadBeforeCancel = null;
+      // The period may have changed while cancelled, so the stashed value need
+      // not appear in the current list — and assigning a value no option
+      // carries selects NOTHING, which the browser renders as the first option
+      // ("No reminder"): the very silent-off this restore exists to prevent.
+      // Rebuilding through leadOptions is what makes it safe; it offers a
+      // clamped current value the standard list omits.
+      if (restored !== "off") {
+        leadEl.innerHTML = leadOptions(
+          { remind: 1, lead_days: Number(restored) },
+          modalEl?.querySelector("#f-period")?.value ?? "monthly",
+        );
+      }
+    }
+    leadEl.disabled = cancelled;
+  };
+  modalEl.querySelector("#f-status").addEventListener("change", syncLeadToStatus);
+  syncLeadToStatus();
+  modalEl.querySelector("#f-period").addEventListener("change", (e) => {
+    const leadEl = modalEl?.querySelector("#f-lead");
+    if (!leadEl) return;
+    const kept = leadEl.value;
+    leadEl.innerHTML = leadOptions(
+      { remind: kept === "off" ? 0 : 1, lead_days: kept === "off" ? DEFAULT_LEAD_DAYS : Number(kept) },
+      e.target.value,
+    );
+    syncLeadToStatus();
+  });
   modalEl.querySelector("#sub-form").addEventListener("submit", (e) => {
     e.preventDefault();
     const name = document.getElementById("f-name").value.trim();
@@ -391,16 +677,30 @@ function openEditor(existing) {
     if (!nextDate) { document.getElementById("f-next").focus(); return; }
     const btn = modalEl?.querySelector('button[type="submit"]');
     if (btn) { btn.disabled = true; btn.textContent = "Saving…"; }
+    const period = document.getElementById("f-period").value;
+    const leadValue = document.getElementById("f-lead").value;
+    const status = document.getElementById("f-status").value;
     saveSub({
       name,
       category: document.getElementById("f-cat").value,
       amount_cents: cents,
-      billing_period: document.getElementById("f-period").value,
+      billing_period: period,
       next_renewal_date: nextDate,
       payer_id: document.getElementById("f-payer").value,
-      status: document.getElementById("f-status").value,
+      status,
       url: document.getElementById("f-url").value.trim(),
       notes: document.getElementById("f-notes").value.trim(),
+      // A cancelled subscription doesn't renew, so it must never be nudged
+      // about a renewal. The hub's date_reminders protocol has no status
+      // filter — it reads `remind` and nothing else — so "cancelled" has to be
+      // WRITTEN as remind = 0, or the cron would keep emailing "renews in a
+      // week" for a service the household dropped. The lead picker is disabled
+      // and forced to "No reminder" while cancelled, so the two always agree.
+      remind: status === "cancelled" || leadValue === "off" ? 0 : 1,
+      // Stored even when reminding is off, so turning it back on restores the
+      // lead time the household last chose instead of silently resetting.
+      lead_days: clampLeadDays(leadValue === "off" ? (s?.lead_days ?? DEFAULT_LEAD_DAYS) : leadValue, period),
+      remind_scope: document.getElementById("f-scope").value,
     }, s?.id ?? null).catch((err) => showError(err.message));
   });
 }

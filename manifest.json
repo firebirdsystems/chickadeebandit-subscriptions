@@ -1,7 +1,7 @@
 {
   "id": "subscriptions",
   "name": "Subscriptions & Bills",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "One shared list of everything the household pays for on repeat — streaming, software, memberships, utilities — with renewal countdowns and a real monthly total.",
   "entrypoint": "index.html",
   "runtime": "static",
@@ -67,7 +67,22 @@
       ]
     }
   },
-  "db_plaintext_columns": ["billing_period", "next_renewal_date"],
+  "db_plaintext_columns": ["billing_period", "next_renewal_date", "remind", "lead_days", "remind_scope"],
+  "required_capabilities": ["cron", "email"],
+  "date_reminders": {
+    "table": "subscriptions",
+    "date_column": "next_renewal_date",
+    "lead_days_column": "lead_days",
+    "default_lead_days": 5,
+    "enabled_column": "remind",
+    "title_column": "name",
+    "kind_column": "category",
+    "owner_column": "payer_id",
+    "visibility_column": "remind_scope",
+    "everyone_values": ["household"],
+    "last_reminded_column": "last_reminded_at",
+    "on_no_recipients": "adults"
+  },
     "member_references": {
       "subscriptions": [
         {
@@ -85,10 +100,55 @@
       "kind": "adult_writable"
     }
   },
-  "publishes": ["subscription.added"],
+  "publishes": [
+    "subscription.added",
+    "subscription.renewal_upcoming",
+    "subscription.renewal_cancelled",
+    "subscription.renewed"
+  ],
   "publish_acls": {
-    "subscription.added": { "require_role": "adult" }
+    "subscription.added": { "require_role": "adult" },
+    "subscription.renewal_upcoming": { "require_role": "adult" },
+    "subscription.renewal_cancelled": { "require_role": "adult" },
+    "subscription.renewed": { "require_role": "adult" }
   },
+  "suggested_automations": [
+    {
+      "title": "Put a \"decide before it renews\" date on the calendar",
+      "description": "When a subscription's renewal is set or rolls over, put an all-day calendar event on the reminder day — a week before it bills, by default. Cancelling is only a real option while there is still time, and the calendar is where the household already looks. Editing the date or the lead time moves the entry that is already there instead of adding a second one.",
+      "trigger_event": "subscription.renewal_upcoming",
+      "target_app_id": "calendar",
+      "action_id": "upsert_dated_event",
+      "param_map": {
+        "title": { "kind": "payload_field", "value": "review_title" },
+        "event_date": { "kind": "payload_field", "value": "remind_on" },
+        "description": { "kind": "payload_field", "value": "summary" },
+        "source_ref_id": { "kind": "payload_field", "value": "source_ref_id" }
+      }
+    },
+    {
+      "title": "Take the \"decide before it renews\" date back off the calendar",
+      "description": "The other half of the rule above, and it only does anything if you have that one. When a subscription is cancelled, deleted, or has its reminder switched off, the calendar entry it put there stops showing — instead of standing forever as a decision the household already made. Add both, or the entry outlives the subscription.",
+      "trigger_event": "subscription.renewal_cancelled",
+      "target_app_id": "calendar",
+      "action_id": "retract_dated_event",
+      "param_map": {
+        "source_ref_id": { "kind": "payload_field", "value": "source_ref_id" }
+      }
+    },
+    {
+      "title": "Book each renewal you mark paid in Finances",
+      "description": "Marking a renewal paid records the charge as a transaction, so recurring costs land in the budget without being typed twice.",
+      "trigger_event": "subscription.renewed",
+      "target_app_id": "finances",
+      "action_id": "record_transaction",
+      "param_map": {
+        "amount_cents": { "kind": "payload_field", "value": "amount_cents" },
+        "description": { "kind": "payload_field", "value": "description" },
+        "date": { "kind": "payload_field", "value": "paid_on" }
+      }
+    }
+  ],
   "nav": { "label": "Subscriptions" },
   "agenda": {
     "kind": "reminder",
