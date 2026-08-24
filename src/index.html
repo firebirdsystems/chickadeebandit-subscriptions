@@ -232,13 +232,17 @@ function showError(msg) { error = msg; render(); }
  * is a static page with no cron of its own.
  *
  * Every publish carries the same `source_ref_id`, and the calendar's
- * `upsert_dated_event` action conflicts on it, so re-announcing MOVES the entry
+ * `create_event` action conflicts on it, so re-announcing MOVES the entry
  * already on the calendar rather than adding one beside it. Editing a renewal
  * date or widening a lead time therefore leaves exactly one entry, on the right
- * day. (The calendar used to also expose an insert-only action keyed on the
- * event id — fresh every publish, so it could never move or remove what it had
- * made. It was removed rather than deprecated: it was the obvious pick, and it
- * only misbehaves on the SECOND publish, so it tested clean.)
+ * day.
+ *
+ * That action used to key only on the triggering event's id, which is fresh
+ * every publish, so it could never move or remove what it had made. The fix
+ * changed its SHAPE and deliberately kept its ID: an action id is a stored
+ * reference in every household's saved rules, resolved against the current
+ * manifest with no alias, so renaming it would have orphaned every rule
+ * already written against it rather than deprecating anything.
  *
  * The reverse — switching the reminder off, cancelling, deleting — publishes
  * `subscription.renewal_cancelled` with the SAME source_ref_id, which a rule

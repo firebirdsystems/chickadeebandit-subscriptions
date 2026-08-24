@@ -118,7 +118,7 @@
       "description": "When a subscription's renewal is set or rolls over, put an all-day calendar event on the reminder day — a week before it bills, by default. Cancelling is only a real option while there is still time, and the calendar is where the household already looks. Editing the date or the lead time moves the entry that is already there instead of adding a second one.",
       "trigger_event": "subscription.renewal_upcoming",
       "target_app_id": "calendar",
-      "action_id": "upsert_dated_event",
+      "action_id": "create_event",
       "param_map": {
         "title": { "kind": "payload_field", "value": "review_title" },
         "event_date": { "kind": "payload_field", "value": "remind_on" },

@@ -134,7 +134,7 @@ describe("manifest.json", () => {
     it("targets the calendar and the budget app", () => {
       expect(manifest.suggested_automations.map((s) => `${s.target_app_id}.${s.action_id}`))
         .toEqual([
-          "calendar.upsert_dated_event",
+          "calendar.create_event",
           "calendar.retract_dated_event",
           "finances.record_transaction",
         ]);
@@ -155,12 +155,14 @@ describe("manifest.json", () => {
     });
 
     it("gives the calendar a stable reference so an edit moves one entry", () => {
-      // The calendar upserts on source_ref_id. Without it in the param_map the
-      // action is skipped outright (an unmapped :param is an unresolved param,
-      // not a null); with a non-constant one, every edit would land a second
-      // entry beside the stale first.
+      // The calendar upserts on source_ref_id. The param is optional there — it
+      // has to be, or adding it would have killed every rule saved before it
+      // existed — so an unmapped one binds NULL rather than skipping the run.
+      // That is precisely why this test matters: NULL is not an error, it is a
+      // row with no identity, and every edit would then land a second entry
+      // beside the stale first with nothing able to retract either.
       const cal = manifest.suggested_automations.find((s) => s.target_app_id === "calendar");
-      expect(cal.action_id).toBe("upsert_dated_event");
+      expect(cal.action_id).toBe("create_event");
       expect(cal.param_map.source_ref_id).toEqual({ kind: "payload_field", value: "source_ref_id" });
       // Namespaced by app: the key shares one column with every publisher.
       expect(indexHtml).toContain("source_ref_id: `subscriptions:${sub.id}`");
