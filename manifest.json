@@ -17,6 +17,9 @@
     "requires_approval": false
   },
   "storage": "db",
+  "preload": {
+    "subscriptions": {"sql": "SELECT id, name, category, amount_cents, billing_period, next_renewal_date, payer_id, status, url, notes, remind, lead_days, remind_scope, last_reminded_at, created_by, created_at, updated_at FROM app_subscriptions__subscriptions"}
+  },
   "automation_actions": {
     "add_subscription": {
       "title": "Track a subscription",
