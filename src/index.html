@@ -107,7 +107,18 @@
 </div>
 
 <script type="module">
-import { esc, isAdult, hubConfirm, fmtMoney, searchMatch } from "/hub-sdk.js";
+import { esc, isAdult, hubConfirm, fmtMoney, searchMatch, hubToday } from "/hub-sdk.js";
+
+// The household's calendar day as a Date, for the pure helpers in logic.js.
+// Those helpers default their date parameter to `new Date()` — the VIEWER
+// DEVICE's calendar — but they compare it against dates STORED on the household
+// calendar, which is what every server-side surface (glance, kiosk, cron,
+// `:today` in declared SQL) reports. Near midnight, or for a member in another
+// timezone, the two name different days. logic.js stays pure and SDK-free, so
+// the household day is supplied here. Noon keeps a DST shift from tipping it
+// into an adjacent day.
+const hubDay = () => new Date(`${hubToday()}T12:00:00`);
+
 import {
   CATEGORIES, PERIODS, REMIND_SCOPES, DEFAULT_LEAD_DAYS, categoryMeta, periodMeta, totalMonthlyCents,
   totalYearlyCents, sortedSubscriptions, renewalLabel, advanceRenewal, parseMoneyToCents, searchableFields,
@@ -250,7 +261,7 @@ function showError(msg) { error = msg; render(); }
  */
 async function announceUpcomingRenewal(sub) {
   if (!wantsRenewalNudge(sub)) return;
-  const remindOn = remindOnDate(sub.next_renewal_date, sub.lead_days, sub.billing_period);
+  const remindOn = remindOnDate(sub.next_renewal_date, sub.lead_days, sub.billing_period, hubDay());
   if (!remindOn) return;
   await publishEvent("subscription.renewal_upcoming", sub.id, {
     // Steady identity for the calendar entry this nudge becomes. The event id
@@ -414,7 +425,7 @@ async function markRenewed(id) {
   if (idx === -1) return;
   const sub = subs[idx];
   const paidOn = sub.next_renewal_date;
-  const nextDate = advanceRenewal(paidOn, sub.billing_period);
+  const nextDate = advanceRenewal(paidOn, sub.billing_period, hubDay());
   const now = nowIso();
   const prev = sub;
   // last_reminded_at is cleared with the date it belonged to: the hub silences
@@ -462,7 +473,7 @@ function pillClass(days) {
  *  read. Empty when the row opted out or has nothing upcoming. */
 function nudgeNote(s) {
   if (!wantsRenewalNudge(s)) return "";
-  const on = remindOnDate(s.next_renewal_date, s.lead_days, s.billing_period);
+  const on = remindOnDate(s.next_renewal_date, s.lead_days, s.billing_period, hubDay());
   return on && on !== s.next_renewal_date ? `🔔 ${shortDate(on)}` : "";
 }
 
@@ -496,7 +507,7 @@ function renderSub(s) {
 // Owns the filtering and the empty states, so the keystroke handler can refresh
 // the list without repeating how it is derived.
 function renderSubList() {
-  const list = sortedSubscriptions(subs);
+  const list = sortedSubscriptions(subs, hubDay());
   const shown = searchQ ? list.filter((s) => searchMatch(searchQ, searchableFields(s))) : list;
   if (shown.length) return `<div class="stack">${shown.map(renderSub).join("")}</div>`;
   if (searchQ) return `<div class="card empty">Nothing matches "${esc(searchQ)}".</div>`;
@@ -514,7 +525,7 @@ document.addEventListener("input", (e) => {
 function render() {
   const root = document.getElementById("root");
   root.className = "app-root";
-  const list = sortedSubscriptions(subs);
+  const list = sortedSubscriptions(subs, hubDay());
   const active = subs.filter((s) => s.status === "active");
   root.innerHTML = `
     <div class="topbar">
