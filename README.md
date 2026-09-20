@@ -1,5 +1,7 @@
 # Subscriptions & Bills
 
+A [Chickadee Bandit](https://chickadeebandit.com/app-library/subscriptions) app.
+
 One shared list of everything the household pays for on repeat, with renewal
 countdowns, "mark renewed" date rolling, and normalized monthly/yearly totals.
 
