@@ -1,0 +1,138 @@
+{
+  "scenarios": [
+    {
+      "name": "every member can see the household's subscriptions, but only adults add, change or remove them",
+      "members": { "parent": "adult", "kid": "child" },
+      "steps": [
+        {
+          "action": "db",
+          "as": "parent",
+          "sql": "INSERT INTO app_subscriptions__subscriptions (id, name, category, amount_cents, billing_period, next_renewal_date, payer_id, status, created_by, created_at, updated_at) VALUES (?, ?, 'streaming', 1599, 'monthly', '2026-02-01', ?, 'active', ?, ?, ?)",
+          "params": ["s1", "Netflix", "{{parent}}", "{{parent}}", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"],
+          "expect": { "status": 200 }
+        },
+        {
+          "action": "db",
+          "as": "kid",
+          "sql": "INSERT INTO app_subscriptions__subscriptions (id, name, category, amount_cents, billing_period, status, created_by, created_at, updated_at) VALUES (?, ?, 'software', 999, 'monthly', 'active', ?, ?, ?)",
+          "params": ["s2", "Game Pass", "{{kid}}", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"],
+          "expect": { "status": 403 }
+        },
+        {
+          "action": "db",
+          "as": "kid",
+          "sql": "UPDATE app_subscriptions__subscriptions SET status = 'cancelled' WHERE id = ?",
+          "params": ["s1"],
+          "expect": { "status": 403 }
+        },
+        {
+          "action": "db",
+          "as": "kid",
+          "sql": "DELETE FROM app_subscriptions__subscriptions WHERE id = ?",
+          "params": ["s1"],
+          "expect": { "status": 403 }
+        },
+        {
+          "action": "db",
+          "as": "kid",
+          "sql": "SELECT id, name, amount_cents, status FROM app_subscriptions__subscriptions",
+          "expect": { "status": 200, "rowCount": 1, "rowsContain": [{ "id": "s1", "name": "Netflix", "amount_cents": 1599, "status": "active" }] }
+        }
+      ]
+    },
+    {
+      "name": "a subscription amount can never be negative",
+      "members": { "parent": "adult" },
+      "steps": [
+        {
+          "action": "db",
+          "as": "parent",
+          "sql": "INSERT INTO app_subscriptions__subscriptions (id, name, amount_cents, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+          "params": ["s_neg", "Refund", -500, "{{parent}}", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"],
+          "expect": { "status": 400, "errorIncludes": "CHECK constraint failed" }
+        },
+        {
+          "action": "db",
+          "as": "parent",
+          "sql": "INSERT INTO app_subscriptions__subscriptions (id, name, amount_cents, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+          "params": ["s_free", "Free tier", 0, "{{parent}}", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"],
+          "expect": { "status": 200 }
+        },
+        {
+          "action": "db",
+          "as": "parent",
+          "sql": "UPDATE app_subscriptions__subscriptions SET amount_cents = -1 WHERE id = ?",
+          "params": ["s_free"],
+          "expect": { "status": 400, "errorIncludes": "CHECK constraint failed" }
+        },
+        {
+          "action": "db",
+          "as": "parent",
+          "sql": "SELECT id, amount_cents FROM app_subscriptions__subscriptions",
+          "expect": { "status": 200, "rowCount": 1, "rowsContain": [{ "id": "s_free", "amount_cents": 0 }] }
+        }
+      ]
+    },
+    {
+      "name": "active_subscriptions lists active subscriptions by next renewal and leaves cancelled ones out",
+      "members": { "parent": "adult", "kid": "child" },
+      "steps": [
+        {
+          "action": "seedRaw",
+          "sql": "INSERT INTO app_subscriptions__subscriptions (id, name, category, amount_cents, billing_period, next_renewal_date, status, created_by, created_at, updated_at) VALUES ('s_late', 'Spotify', 'streaming', 1199, 'monthly', '2026-03-15', 'active', ?, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'), ('s_soon', 'Home insurance', 'insurance', 90000, 'yearly', '2026-02-01', 'active', ?, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'), ('s_gone', 'Gym', 'memberships', 4000, 'monthly', '2026-02-10', 'cancelled', ?, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+          "params": ["{{parent}}", "{{parent}}", "{{parent}}"]
+        },
+        {
+          "action": "named",
+          "as": "parent",
+          "kind": "query",
+          "name": "active_subscriptions",
+          "expect": {
+            "status": 200,
+            "rowCount": 2,
+            "rowsContain": [
+              { "id": "s_soon", "name": "Home insurance", "amount_cents": 90000, "billing_period": "yearly", "next_renewal_date": "2026-02-01" },
+              { "id": "s_late", "name": "Spotify", "amount_cents": 1199, "billing_period": "monthly", "next_renewal_date": "2026-03-15" }
+            ]
+          }
+        },
+        {
+          "action": "db",
+          "as": "kid",
+          "sql": "SELECT id FROM app_subscriptions__subscriptions WHERE status = 'active' ORDER BY next_renewal_date LIMIT 1",
+          "expect": { "status": 200, "rowCount": 1, "rowsContain": [{ "id": "s_soon" }] }
+        }
+      ]
+    },
+    {
+      "name": "only adults can announce subscription events; a child cannot publish them",
+      "members": { "parent": "adult", "kid": "child" },
+      "steps": [
+        {
+          "action": "publish",
+          "as": "kid",
+          "type": "subscription.added",
+          "subject_id": "s1",
+          "payload": { "name": "Netflix", "amount_cents": 1599, "billing_period": "monthly" },
+          "expect": { "status": 403 }
+        },
+        {
+          "action": "publish",
+          "as": "kid",
+          "type": "subscription.renewed",
+          "subject_id": "s1",
+          "payload": { "name": "Netflix", "amount_cents": 1599, "description": "Netflix renewal", "paid_on": "2026-02-01" },
+          "expect": { "status": 403 }
+        },
+        {
+          "action": "publish",
+          "as": "parent",
+          "type": "subscription.added",
+          "subject_id": "s1",
+          "payload": { "name": "Netflix", "amount_cents": 1599, "billing_period": "monthly" },
+          "expect": { "status": 201 }
+        }
+      ]
+    }
+  ]
+}
