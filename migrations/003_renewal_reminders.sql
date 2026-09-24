@@ -3,10 +3,10 @@
 --
 -- One switch, two delivery channels. `remind`/`lead_days` describe the nudge
 -- the household wants; how it arrives is the household's choice:
---   • free    — the app publishes `subscription.renewal_upcoming`, which an
+--   • in-app  — the app publishes `subscription.renewal_upcoming`, which an
 --               automation rule can turn into a calendar entry on `remind_on`.
---   • premium — the hub's `date_reminders` cron emails the same nudge
---               (manifest `date_reminders` block; needs cron + email).
+--   • email   — the hub's `date_reminders` cron emails the same nudge
+--               (manifest `date_reminders` block; cron + email, on every live plan).
 -- Both read the same two columns, so a household never configures the nudge
 -- twice and the two channels can never disagree about the date.
 --

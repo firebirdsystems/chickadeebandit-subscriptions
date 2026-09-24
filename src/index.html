@@ -211,9 +211,9 @@ async function loadSubs() {
 
 /** Whether the hub cron will actually EMAIL renewal reminders for this
  *  household. The calendar half of a nudge is free (it rides an automation
- *  rule on the event this app publishes); the email half is the premium
- *  date_reminders protocol, and this endpoint is the only honest way to say
- *  which the household has. Non-fatal: demo mode and older hubs just skip it. */
+ *  rule on the event this app publishes); the email half is the hub's
+ *  date_reminders protocol, which pauses while the plan is inactive, and this
+ *  endpoint is the only honest way to say which the household has. Non-fatal: demo mode and older hubs just skip it. */
 async function loadReminderStatus() {
   reminderStatus = null;
   if (!DB) return;
@@ -533,7 +533,7 @@ function render() {
         <h1>Subscriptions & Bills</h1>
         <p class="muted tiny">Everything the household pays for on repeat.</p>
         ${reminderStatus && !reminderStatus.entitled
-          ? `<p class="muted tiny">📬 Emailed reminders are part of the ${esc(reminderStatus.bundle ?? "premium")} bundle — countdowns and calendar nudges work either way.</p>`
+          ? `<p class="muted tiny">📬 Emailed reminders are paused while the household's plan is inactive — countdowns and calendar nudges work either way.</p>`
           : ""}
       </div>
       ${canManage() ? `<button class="btn" data-testid="add-subscription" data-add>+ Add</button>` : ""}
@@ -584,7 +584,7 @@ function leadNote() {
   if (!reminderStatus) return calendar;
   return reminderStatus.entitled
     ? `${calendar} Also emailed on the day.`
-    : `${calendar} Email reminders need the ${reminderStatus.bundle ?? "premium"} bundle.`;
+    : `${calendar} Email reminders resume when the household's plan is active.`;
 }
 
 function openEditor(existing) {
