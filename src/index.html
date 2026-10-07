@@ -107,7 +107,7 @@
 </div>
 
 <script type="module">
-import { esc, isAdult, hubConfirm, fmtMoney, searchMatch, hubToday } from "/hub-sdk.js";
+import { esc, isAdult, hubConfirm, fmtMoney, searchMatch, hubToday, glyph } from "/hub-sdk.js";
 
 // The household's calendar day as a Date, for the pure helpers in logic.js.
 // Those helpers default their date parameter to `new Date()` — the VIEWER
@@ -468,13 +468,13 @@ function pillClass(days) {
   return "";
 }
 
-/** "Nudge Aug 22" — the day this row's reminder is for, so the lead time is
+/** "Aug 22" — the day this row's reminder is for, so the lead time is
  *  visible as a date rather than as a setting you have to open the editor to
  *  read. Empty when the row opted out or has nothing upcoming. */
 function nudgeNote(s) {
   if (!wantsRenewalNudge(s)) return "";
   const on = remindOnDate(s.next_renewal_date, s.lead_days, s.billing_period, hubDay());
-  return on && on !== s.next_renewal_date ? `🔔 ${shortDate(on)}` : "";
+  return on && on !== s.next_renewal_date ? shortDate(on) : "";
 }
 
 function renderSub(s) {
@@ -485,11 +485,11 @@ function renderSub(s) {
   const cancelled = s.status === "cancelled";
   return `
     <div class="row ${cancelled ? "cancelled" : ""}" data-testid="sub-row" data-sub-id="${esc(s.id)}">
-      <div class="row-icon" aria-hidden="true">${cat.icon}</div>
+      <div class="row-icon" aria-hidden="true">${glyph(cat.glyph)}</div>
       <div class="row-body">
         <div class="row-title" data-testid="sub-name">${esc(s.name)}</div>
         <div class="row-meta" data-testid="sub-meta">
-          ${esc(cat.label)} · ${esc(per.label.toLowerCase())}${payer ? ` · ${esc(payer)} pays` : ""}${nudge && !cancelled ? ` · ${esc(nudge)}` : ""}${s.notes ? ` · ${esc(s.notes)}` : ""}
+          ${esc(cat.label)} · ${esc(per.label.toLowerCase())}${payer ? ` · ${esc(payer)} pays` : ""}${nudge && !cancelled ? ` · <span data-testid="sub-nudge">${glyph("bell")} ${esc(nudge)}</span>` : ""}${s.notes ? ` · ${esc(s.notes)}` : ""}
         </div>
       </div>
       <div class="row-side">
@@ -533,7 +533,7 @@ function render() {
         <h1>Subscriptions & Bills</h1>
         <p class="muted tiny">Everything the household pays for on repeat.</p>
         ${reminderStatus && !reminderStatus.entitled
-          ? `<p class="muted tiny">📬 Emailed reminders are paused while the household's plan is inactive — countdowns and calendar nudges work either way.</p>`
+          ? `<p class="muted tiny">${glyph("bell-off")} Emailed reminders are paused while the household's plan is inactive — countdowns and calendar nudges work either way.</p>`
           : ""}
       </div>
       ${canManage() ? `<button class="btn" data-testid="add-subscription" data-add>+ Add</button>` : ""}
@@ -590,7 +590,7 @@ function leadNote() {
 function openEditor(existing) {
   const s = existing ?? null;
   const scopeOptions = REMIND_SCOPES.map((r) => `<option value="${r.value}" ${(s?.remind_scope ?? "payer") === r.value ? "selected" : ""}>${esc(r.label)}</option>`).join("");
-  const catOptions = CATEGORIES.map((c) => `<option value="${c.value}" ${s?.category === c.value ? "selected" : ""}>${c.icon} ${c.label}</option>`).join("");
+  const catOptions = CATEGORIES.map((c) => `<option value="${c.value}" ${s?.category === c.value ? "selected" : ""}>${c.label}</option>`).join("");
   const perOptions = PERIODS.map((p) => `<option value="${p.value}" ${(s?.billing_period ?? "monthly") === p.value ? "selected" : ""}>${p.label}</option>`).join("");
   const payerOptions = [`<option value="">—</option>`, ...members.map((m) => `<option value="${esc(m.id)}" ${s?.payer_id === m.id ? "selected" : ""}>${esc(m.name)}</option>`)].join("");
   openModal(`

@@ -4,12 +4,12 @@
  */
 
 export const CATEGORIES = [
-  { value: "streaming",   label: "Streaming",   icon: "📺" },
-  { value: "software",    label: "Software",    icon: "💻" },
-  { value: "memberships", label: "Memberships", icon: "🏋️" },
-  { value: "utilities",   label: "Utilities",   icon: "💡" },
-  { value: "insurance",   label: "Insurance",   icon: "🛡️" },
-  { value: "other",       label: "Other",       icon: "📌" },
+  { value: "streaming",   label: "Streaming",   glyph: "screen" },
+  { value: "software",    label: "Software",    glyph: "laptop" },
+  { value: "memberships", label: "Memberships", glyph: "dumbbell" },
+  { value: "utilities",   label: "Utilities",   glyph: "lightbulb" },
+  { value: "insurance",   label: "Insurance",   glyph: "shield" },
+  { value: "other",       label: "Other",       glyph: "pin" },
 ];
 
 export const PERIODS = [
@@ -43,7 +43,7 @@ const CAT_BY_VALUE = new Map(CATEGORIES.map((c) => [c.value, c]));
 const PERIOD_BY_VALUE = new Map(PERIODS.map((p) => [p.value, p]));
 
 export function categoryMeta(v) {
-  return CAT_BY_VALUE.get(v) ?? { value: "other", label: "Other", icon: "📌" };
+  return CAT_BY_VALUE.get(v) ?? { value: "other", label: "Other", glyph: "pin" };
 }
 
 export function periodMeta(v) {

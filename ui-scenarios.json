@@ -20,8 +20,8 @@
         { "action": "expectText", "text": "Streamly", "selector": "[data-testid=\"sub-list\"]" },
         {
           "action": "expectText",
-          "text": "🔔 Jun 8",
-          "selector": "[data-testid=\"sub-meta\"]"
+          "text": "Jun 8",
+          "selector": "[data-testid=\"sub-nudge\"]"
         },
 
         { "action": "click", "selector": "[data-testid=\"edit-subscription\"]" },
@@ -30,7 +30,7 @@
         { "action": "click", "selector": "[data-testid=\"sub-submit\"]" },
         { "action": "waitFor", "selector": "[data-testid=\"sub-form\"]", "state": "detached" },
         { "action": "reload" },
-        { "action": "expectNoText", "text": "🔔" }
+        { "action": "expectCount", "selector": "[data-testid=\"sub-nudge\"]", "count": 0 }
       ]
     },
     {
