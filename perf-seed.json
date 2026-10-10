@@ -1,0 +1,304 @@
+{
+  "seed": [
+    {
+      "sql": "INSERT INTO app_subscriptions__subscriptions (id, name, category, amount_cents, billing_period, next_renewal_date, payer_id, status, notes, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now','-293 days'), datetime('now','-1 days'))",
+      "params": [
+        "sub-01",
+        "Netflix",
+        "streaming",
+        1599,
+        "monthly",
+        "{{date:4}}",
+        "{{me}}",
+        "active",
+        "Renews automatically",
+        "{{me}}"
+      ]
+    },
+    {
+      "sql": "INSERT INTO app_subscriptions__subscriptions (id, name, category, amount_cents, billing_period, next_renewal_date, payer_id, status, notes, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now','-286 days'), datetime('now','-2 days'))",
+      "params": [
+        "sub-02",
+        "Spotify Family",
+        "streaming",
+        1699,
+        "monthly",
+        "{{date:11}}",
+        "{{partner}}",
+        "active",
+        "Renews automatically",
+        "{{me}}"
+      ]
+    },
+    {
+      "sql": "INSERT INTO app_subscriptions__subscriptions (id, name, category, amount_cents, billing_period, next_renewal_date, payer_id, status, notes, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now','-279 days'), datetime('now','-3 days'))",
+      "params": [
+        "sub-03",
+        "Disney+",
+        "streaming",
+        1399,
+        "monthly",
+        "{{date:19}}",
+        "{{me}}",
+        "active",
+        "Renews automatically",
+        "{{me}}"
+      ]
+    },
+    {
+      "sql": "INSERT INTO app_subscriptions__subscriptions (id, name, category, amount_cents, billing_period, next_renewal_date, payer_id, status, notes, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now','-272 days'), datetime('now','-4 days'))",
+      "params": [
+        "sub-04",
+        "iCloud 2TB",
+        "software",
+        999,
+        "monthly",
+        "{{date:2}}",
+        "{{me}}",
+        "active",
+        "Renews automatically",
+        "{{me}}"
+      ]
+    },
+    {
+      "sql": "INSERT INTO app_subscriptions__subscriptions (id, name, category, amount_cents, billing_period, next_renewal_date, payer_id, status, notes, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now','-265 days'), datetime('now','-5 days'))",
+      "params": [
+        "sub-05",
+        "1Password Families",
+        "software",
+        5988,
+        "yearly",
+        "{{date:140}}",
+        "{{me}}",
+        "active",
+        "Renews automatically",
+        "{{me}}"
+      ]
+    },
+    {
+      "sql": "INSERT INTO app_subscriptions__subscriptions (id, name, category, amount_cents, billing_period, next_renewal_date, payer_id, status, notes, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now','-258 days'), datetime('now','-6 days'))",
+      "params": [
+        "sub-06",
+        "Adobe Photography",
+        "software",
+        1199,
+        "monthly",
+        "{{date:23}}",
+        "{{partner}}",
+        "cancelled",
+        "Renews automatically",
+        "{{me}}"
+      ]
+    },
+    {
+      "sql": "INSERT INTO app_subscriptions__subscriptions (id, name, category, amount_cents, billing_period, next_renewal_date, payer_id, status, notes, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now','-251 days'), datetime('now','-7 days'))",
+      "params": [
+        "sub-07",
+        "Gym membership",
+        "memberships",
+        4500,
+        "monthly",
+        "{{date:6}}",
+        "{{partner}}",
+        "active",
+        "Renews automatically",
+        "{{me}}"
+      ]
+    },
+    {
+      "sql": "INSERT INTO app_subscriptions__subscriptions (id, name, category, amount_cents, billing_period, next_renewal_date, payer_id, status, notes, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now','-244 days'), datetime('now','-8 days'))",
+      "params": [
+        "sub-08",
+        "Climbing gym",
+        "memberships",
+        6900,
+        "monthly",
+        "{{date:15}}",
+        "{{me}}",
+        "active",
+        "Renews automatically",
+        "{{me}}"
+      ]
+    },
+    {
+      "sql": "INSERT INTO app_subscriptions__subscriptions (id, name, category, amount_cents, billing_period, next_renewal_date, payer_id, status, notes, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now','-237 days'), datetime('now','-9 days'))",
+      "params": [
+        "sub-09",
+        "Costco",
+        "memberships",
+        6500,
+        "yearly",
+        "{{date:220}}",
+        "{{me}}",
+        "active",
+        "Renews automatically",
+        "{{me}}"
+      ]
+    },
+    {
+      "sql": "INSERT INTO app_subscriptions__subscriptions (id, name, category, amount_cents, billing_period, next_renewal_date, payer_id, status, notes, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now','-230 days'), datetime('now','-10 days'))",
+      "params": [
+        "sub-10",
+        "Internet",
+        "utilities",
+        7999,
+        "monthly",
+        "{{date:9}}",
+        "{{me}}",
+        "active",
+        "Renews automatically",
+        "{{me}}"
+      ]
+    },
+    {
+      "sql": "INSERT INTO app_subscriptions__subscriptions (id, name, category, amount_cents, billing_period, next_renewal_date, payer_id, status, notes, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now','-223 days'), datetime('now','-11 days'))",
+      "params": [
+        "sub-11",
+        "Mobile plan",
+        "utilities",
+        12000,
+        "monthly",
+        "{{date:13}}",
+        "{{partner}}",
+        "active",
+        "Renews automatically",
+        "{{me}}"
+      ]
+    },
+    {
+      "sql": "INSERT INTO app_subscriptions__subscriptions (id, name, category, amount_cents, billing_period, next_renewal_date, payer_id, status, notes, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now','-216 days'), datetime('now','-12 days'))",
+      "params": [
+        "sub-12",
+        "Electricity",
+        "utilities",
+        14000,
+        "monthly",
+        "{{date:21}}",
+        "{{me}}",
+        "active",
+        "Renews automatically",
+        "{{me}}"
+      ]
+    },
+    {
+      "sql": "INSERT INTO app_subscriptions__subscriptions (id, name, category, amount_cents, billing_period, next_renewal_date, payer_id, status, notes, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now','-209 days'), datetime('now','-13 days'))",
+      "params": [
+        "sub-13",
+        "Home insurance",
+        "insurance",
+        128000,
+        "yearly",
+        "{{date:75}}",
+        "{{me}}",
+        "active",
+        "Renews automatically",
+        "{{me}}"
+      ]
+    },
+    {
+      "sql": "INSERT INTO app_subscriptions__subscriptions (id, name, category, amount_cents, billing_period, next_renewal_date, payer_id, status, notes, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now','-202 days'), datetime('now','-14 days'))",
+      "params": [
+        "sub-14",
+        "Car insurance",
+        "insurance",
+        96000,
+        "yearly",
+        "{{date:190}}",
+        "{{partner}}",
+        "active",
+        "Renews automatically",
+        "{{me}}"
+      ]
+    },
+    {
+      "sql": "INSERT INTO app_subscriptions__subscriptions (id, name, category, amount_cents, billing_period, next_renewal_date, payer_id, status, notes, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now','-195 days'), datetime('now','-15 days'))",
+      "params": [
+        "sub-15",
+        "Pet insurance",
+        "insurance",
+        3900,
+        "monthly",
+        "{{date:17}}",
+        "{{partner}}",
+        "active",
+        "Renews automatically",
+        "{{me}}"
+      ]
+    },
+    {
+      "sql": "INSERT INTO app_subscriptions__subscriptions (id, name, category, amount_cents, billing_period, next_renewal_date, payer_id, status, notes, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now','-188 days'), datetime('now','-16 days'))",
+      "params": [
+        "sub-16",
+        "Newspaper",
+        "other",
+        1500,
+        "monthly",
+        "{{date:27}}",
+        "{{me}}",
+        "cancelled",
+        "Renews automatically",
+        "{{me}}"
+      ]
+    },
+    {
+      "sql": "INSERT INTO app_subscriptions__subscriptions (id, name, category, amount_cents, billing_period, next_renewal_date, payer_id, status, notes, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now','-181 days'), datetime('now','-17 days'))",
+      "params": [
+        "sub-17",
+        "Meal kit",
+        "other",
+        7200,
+        "weekly",
+        "{{date:3}}",
+        "{{me}}",
+        "active",
+        "Renews automatically",
+        "{{me}}"
+      ]
+    },
+    {
+      "sql": "INSERT INTO app_subscriptions__subscriptions (id, name, category, amount_cents, billing_period, next_renewal_date, payer_id, status, notes, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now','-174 days'), datetime('now','-18 days'))",
+      "params": [
+        "sub-18",
+        "Cloud backup",
+        "software",
+        700,
+        "monthly",
+        "{{date:8}}",
+        "{{me}}",
+        "active",
+        "Renews automatically",
+        "{{me}}"
+      ]
+    },
+    {
+      "sql": "INSERT INTO app_subscriptions__subscriptions (id, name, category, amount_cents, billing_period, next_renewal_date, payer_id, status, notes, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now','-167 days'), datetime('now','-19 days'))",
+      "params": [
+        "sub-19",
+        "Amazon Prime",
+        "memberships",
+        13900,
+        "yearly",
+        "{{date:300}}",
+        "{{me}}",
+        "active",
+        "Renews automatically",
+        "{{me}}"
+      ]
+    },
+    {
+      "sql": "INSERT INTO app_subscriptions__subscriptions (id, name, category, amount_cents, billing_period, next_renewal_date, payer_id, status, notes, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now','-160 days'), datetime('now','-20 days'))",
+      "params": [
+        "sub-20",
+        "Language app",
+        "software",
+        1299,
+        "monthly",
+        "{{date:25}}",
+        "{{partner}}",
+        "active",
+        "Renews automatically",
+        "{{me}}"
+      ]
+    }
+  ]
+}
