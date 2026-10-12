@@ -184,6 +184,11 @@ async function db(sql, params = []) {
   return json;
 }
 
+// A failed write shows one fixed line for the action. Only wording this app
+// wrote for the reader (marked `forUser` where it is thrown) is shown as is;
+// the hub's own error text goes to the console.
+function failText(e, line) { if (!e?.forUser) console.error(e); return e?.forUser ? e.message : line; }
+
 /* ── Loading ───────────────────────────────────────────────────────────────── */
 async function loadMembers() {
   if (!CONTEXT) {
@@ -381,7 +386,7 @@ async function saveSub(fields, existingId) {
         `UPDATE app_subscriptions__subscriptions SET name=?, category=?, amount_cents=?, billing_period=?, next_renewal_date=?, payer_id=?, status=?, url=?, notes=?, remind=?, lead_days=?, remind_scope=?, ${renewalMoved ? "last_reminded_at=NULL, " : ""}updated_at=? WHERE id=?`,
         [fields.name, fields.category, fields.amount_cents, fields.billing_period, fields.next_renewal_date, fields.payer_id, fields.status, fields.url, fields.notes, fields.remind, fields.lead_days, fields.remind_scope, now, existingId],
       );
-    } catch (e) { if (idx !== -1 && prev) subs[idx] = prev; showError(e.message); return; }
+    } catch (e) { if (idx !== -1 && prev) subs[idx] = prev; showError(failText(e, "Couldn’t save the subscription — try again.")); return; }
     // Outside the rollback: the row is committed, so a failed publish (a 429,
     // say) must not put the pre-edit values back on screen. The nudge is a
     // best-effort side effect — announceRenewalSafely says so out loud.
@@ -395,7 +400,7 @@ async function saveSub(fields, existingId) {
         "INSERT INTO app_subscriptions__subscriptions (id, name, category, amount_cents, billing_period, next_renewal_date, payer_id, status, url, notes, remind, lead_days, remind_scope, created_by, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         [row.id, row.name, row.category, row.amount_cents, row.billing_period, row.next_renewal_date, row.payer_id, row.status, row.url, row.notes, row.remind, row.lead_days, row.remind_scope, row.created_by, now, now],
       );
-    } catch (e) { subs = subs.filter((s) => s.id !== row.id); showError(e.message); return; }
+    } catch (e) { subs = subs.filter((s) => s.id !== row.id); showError(failText(e, "Couldn’t save the subscription — try again.")); return; }
     // Same rule as the edit branch, and it matters more here: the INSERT has
     // committed, so unwinding the local row on a publish failure would hide a
     // subscription that exists and invite the user to add it a second time.
@@ -420,7 +425,7 @@ async function deleteSub(id) {
   subs = subs.filter((s) => s.id !== id);
   closeModal(); render();
   try { await db("DELETE FROM app_subscriptions__subscriptions WHERE id = ?", [id]); }
-  catch (e) { subs = prev; showError(e.message); return; }
+  catch (e) { subs = prev; showError(failText(e, "Couldn’t delete the subscription — try again.")); return; }
   // After the DELETE commits, and not before: a retraction published for a row
   // that then failed to delete would strand the subscription in the list with
   // its calendar entry already gone.
@@ -452,7 +457,7 @@ async function markRenewed(id) {
       "UPDATE app_subscriptions__subscriptions SET next_renewal_date=?, last_reminded_at=NULL, updated_at=? WHERE id=? AND next_renewal_date=?",
       [nextDate, now, id, paidOn],
     );
-  } catch (e) { subs[idx] = prev; showError(e.message); return; }
+  } catch (e) { subs[idx] = prev; showError(failText(e, "Couldn’t mark it renewed — try again.")); return; }
   if (DB && !Number(res.changed)) {
     try { await loadSubs(); } catch { subs = subs.map((s) => (s.id === id ? prev : s)); }
     showError("Someone already marked this renewed.");
@@ -745,7 +750,7 @@ function openEditor(existing) {
       // lead time the household last chose instead of silently resetting.
       lead_days: clampLeadDays(leadValue === "off" ? (s?.lead_days ?? DEFAULT_LEAD_DAYS) : leadValue, period),
       remind_scope: document.getElementById("f-scope").value,
-    }, s?.id ?? null).catch((err) => showError(err.message));
+    }, s?.id ?? null).catch((err) => showError(failText(err, "Couldn’t save the subscription — try again.")));
   });
 }
 
@@ -758,7 +763,7 @@ document.addEventListener("click", (e) => {
   if (t.hasAttribute("data-edit")) { openEditor(subs.find((s) => s.id === t.getAttribute("data-edit"))); return; }
   if (t.hasAttribute("data-cancel")) { closeModal(); return; }
   if (t.hasAttribute("data-delete")) { deleteSub(t.getAttribute("data-delete")); return; }
-  if (t.hasAttribute("data-renewed")) { markRenewed(t.getAttribute("data-renewed")).catch((err) => showError(err.message)); return; }
+  if (t.hasAttribute("data-renewed")) { markRenewed(t.getAttribute("data-renewed")).catch((err) => showError(failText(err, "Couldn’t mark it renewed — try again."))); return; }
 });
 
 refresh();
