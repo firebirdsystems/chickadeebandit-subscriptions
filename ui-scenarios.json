@@ -91,7 +91,7 @@
           "params": ["Toggle Streaming"]
         },
         { "action": "open" },
-        { "action": "expectText", "text": "\ud83d\udd14 Jun 8", "selector": "[data-testid=\"sub-meta\"]" },
+        { "action": "expectText", "text": "Jun 8", "selector": "[data-testid=\"sub-nudge\"]" },
 
         { "action": "click", "selector": "[data-testid=\"edit-subscription\"]" },
         { "action": "waitFor", "selector": "[data-testid=\"sub-form\"]" },
@@ -103,7 +103,7 @@
         { "action": "waitFor", "selector": "[data-testid=\"sub-form\"]", "state": "detached" },
         { "action": "reload" },
 
-        { "action": "expectText", "text": "\ud83d\udd14 Jun 8", "selector": "[data-testid=\"sub-meta\"]" }
+        { "action": "expectText", "text": "Jun 8", "selector": "[data-testid=\"sub-nudge\"]" }
       ]
     },
     {
@@ -125,6 +125,62 @@
         { "action": "open", "as": "adult" },
         { "action": "expectCount", "selector": "[data-testid=\"add-subscription\"]", "count": 1, "as": "adult" },
         { "action": "expectCount", "selector": "[data-testid=\"edit-subscription\"]", "count": 1, "as": "adult" }
+      ]
+    },
+    {
+      "name": "a renewal mark the hub did not apply is reported, not shown as done, and can be made again",
+      "members": { "adult": "adult" },
+      "steps": [
+        {
+          "action": "seedRaw",
+          "sql": "INSERT INTO app_subscriptions__subscriptions (id, name, category, amount_cents, billing_period, next_renewal_date, payer_id, status, url, notes, remind, lead_days, remind_scope, created_by, created_at, updated_at) VALUES ('s-refused', ?, 'streaming', 1549, 'monthly', date('now','-3 days'), '', 'active', '', '', 1, 7, 'payer', 'seed', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')",
+          "params": ["Refused Service"]
+        },
+        { "action": "open" },
+        { "action": "expectCount", "selector": "[data-testid=\"mark-renewed\"][data-sub-id=\"s-refused\"]", "count": 1 },
+
+        { "action": "fault", "mode": "noop" },
+        { "action": "click", "selector": "[data-testid=\"mark-renewed\"][data-sub-id=\"s-refused\"]" },
+        { "action": "expectText", "text": "Someone already marked this renewed.", "selector": "[data-testid=\"error\"]" },
+        { "action": "expectCount", "selector": "[data-testid=\"mark-renewed\"][data-sub-id=\"s-refused\"]", "count": 1 },
+
+        { "action": "fault", "mode": "none" },
+        { "action": "reload" },
+        { "action": "expectText", "text": "Refused Service", "selector": "[data-testid=\"sub-list\"]" },
+        { "action": "expectCount", "selector": "[data-testid=\"mark-renewed\"][data-sub-id=\"s-refused\"]", "count": 1 },
+
+        { "action": "click", "selector": "[data-testid=\"mark-renewed\"][data-sub-id=\"s-refused\"]" },
+        { "action": "waitFor", "selector": "[data-testid=\"mark-renewed\"][data-sub-id=\"s-refused\"]", "state": "detached" },
+        { "action": "reload" },
+        { "action": "expectText", "text": "Refused Service", "selector": "[data-testid=\"sub-list\"]" },
+        { "action": "expectCount", "selector": "[data-testid=\"mark-renewed\"]", "count": 0 },
+        { "action": "expectCount", "selector": "[data-testid=\"error\"]", "count": 0 }
+      ]
+    },
+    {
+      "name": "marking a renewal someone else already advanced says so and leaves their date in place",
+      "members": { "adult": "adult" },
+      "steps": [
+        {
+          "action": "seedRaw",
+          "sql": "INSERT INTO app_subscriptions__subscriptions (id, name, category, amount_cents, billing_period, next_renewal_date, payer_id, status, url, notes, remind, lead_days, remind_scope, created_by, created_at, updated_at) VALUES ('s-stale', ?, 'streaming', 1549, 'monthly', date('now','-3 days'), '', 'active', '', '', 1, 7, 'payer', 'seed', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')",
+          "params": ["Stale Service"]
+        },
+        { "action": "open" },
+        { "action": "expectCount", "selector": "[data-testid=\"mark-renewed\"][data-sub-id=\"s-stale\"]", "count": 1 },
+
+        {
+          "action": "seedRaw",
+          "sql": "UPDATE app_subscriptions__subscriptions SET next_renewal_date = date('now','+2 years'), updated_at = '2026-01-02T00:00:00.000Z' WHERE id = 's-stale'"
+        },
+        { "action": "click", "selector": "[data-testid=\"mark-renewed\"][data-sub-id=\"s-stale\"]" },
+        { "action": "expectText", "text": "Someone already marked this renewed.", "selector": "[data-testid=\"error\"]" },
+        { "action": "expectText", "text": "In a year", "selector": "[data-testid=\"sub-row\"][data-sub-id=\"s-stale\"] [data-testid=\"sub-countdown\"]" },
+        { "action": "expectCount", "selector": "[data-testid=\"mark-renewed\"]", "count": 0 },
+
+        { "action": "reload" },
+        { "action": "expectText", "text": "In a year", "selector": "[data-testid=\"sub-row\"][data-sub-id=\"s-stale\"] [data-testid=\"sub-countdown\"]" },
+        { "action": "expectCount", "selector": "[data-testid=\"mark-renewed\"]", "count": 0 }
       ]
     }
   ]

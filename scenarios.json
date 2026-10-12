@@ -133,6 +133,37 @@
           "expect": { "status": 201 }
         }
       ]
+    },
+    {
+      "name": "when two adults mark the same renewal at once, the first advances the date and the second changes nothing",
+      "members": { "first": "adult", "second": "adult" },
+      "steps": [
+        {
+          "action": "seedRaw",
+          "sql": "INSERT INTO app_subscriptions__subscriptions (id, name, category, amount_cents, billing_period, next_renewal_date, status, created_by, created_at, updated_at) VALUES ('s_due', 'Spotify', 'streaming', 1199, 'monthly', '2026-01-15', 'active', ?, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+          "params": ["{{first}}"]
+        },
+        {
+          "action": "db",
+          "as": "first",
+          "sql": "UPDATE app_subscriptions__subscriptions SET next_renewal_date=?, last_reminded_at=NULL, updated_at=? WHERE id=? AND next_renewal_date=? RETURNING id",
+          "params": ["2026-02-15", "2026-01-16T00:00:00Z", "s_due", "2026-01-15"],
+          "expect": { "status": 200, "rowCount": 1 }
+        },
+        {
+          "action": "db",
+          "as": "second",
+          "sql": "UPDATE app_subscriptions__subscriptions SET next_renewal_date=?, last_reminded_at=NULL, updated_at=? WHERE id=? AND next_renewal_date=? RETURNING id",
+          "params": ["2026-02-15", "2026-01-16T00:00:00Z", "s_due", "2026-01-15"],
+          "expect": { "status": 200, "rowCount": 0 }
+        },
+        {
+          "action": "db",
+          "as": "second",
+          "sql": "SELECT next_renewal_date FROM app_subscriptions__subscriptions WHERE id = 's_due'",
+          "expect": { "status": 200, "rowCount": 1, "rowsContain": [{ "next_renewal_date": "2026-02-15" }] }
+        }
+      ]
     }
   ]
 }

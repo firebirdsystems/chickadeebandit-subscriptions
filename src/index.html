@@ -98,6 +98,8 @@
       background: var(--surface, var(--card, #fff)); color: var(--text, inherit);
     }
     .search-input:focus { outline: none; border-color: var(--accent, #6366f1); }
+    .load-error { margin: 0 0 12px; padding: 10px 14px; border-radius: 10px; background: var(--hub-tint-danger, #fee2e2); color: var(--hub-tint-danger-fg, #b91c1c); font-size: 0.9rem; display: flex; gap: 10px; align-items: center; justify-content: space-between; }
+    .load-error-retry { background: none; border: 1px solid currentColor; border-radius: 8px; padding: 5px 10px; font: inherit; font-weight: 600; color: inherit; cursor: pointer; flex-shrink: 0; }
   </style>
   <base href="/run/subscriptions/">
 </head>
@@ -177,8 +179,8 @@ async function db(sql, params = []) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ sql, params }),
   });
-  const json = await res.json();
-  if (json.error) throw new Error(json.error);
+  const json = await res.json().catch(() => null);
+  if (!res.ok || !json || typeof json !== "object" || json.error) throw new Error(json?.error || "Couldn’t reach the hub. Try again.");
   return json;
 }
 
@@ -187,10 +189,13 @@ async function loadMembers() {
   if (!CONTEXT) {
     members = [{ id: "demo-1", name: "Alex", role: "adult" }, { id: "demo-2", name: "Jordan", role: "adult" }];
   } else {
-    try {
-      const res = await fetch(`${CONTEXT}?keys=family.members`);
-      members = ((await res.json())["family.members"]) ?? [];
-    } catch { members = []; }
+    // A roster that could not be read is a failed load, not an empty household.
+    const res = await fetch(`${CONTEXT}?keys=family.members`);
+    const json = await res.json().catch(() => null);
+    if (!res.ok || !json || typeof json !== "object" || json.error) throw new Error("Could not load the member list");
+    // A 200 can still name a key the hub failed to read: that is a failed load too.
+    if (Array.isArray(json.$errors) && json.$errors.includes("family.members")) throw new Error("Could not load the member list");
+    members = json["family.members"] ?? [];
   }
   memberMap = new Map(members.map((m) => [m.id, m]));
   me = HUB_MEMBER ?? members[0] ?? { id: "guest", name: "Guest", role: "adult" };
@@ -223,12 +228,15 @@ async function loadReminderStatus() {
   } catch { /* leave null — the UI simply says less */ }
 }
 
+let loadFailed = false; // the first load failed: banner instead of the list
+
 async function refresh() {
   error = "";
   try {
     await Promise.all([loadMembers(), loadSubs(), loadReminderStatus()]);
+    loadFailed = false;
     render();
-  } catch (e) { error = e.message; render(); }
+  } catch { loadFailed = true; render(); }
 }
 
 function showError(msg) { error = msg; render(); }
@@ -436,12 +444,20 @@ async function markRenewed(id) {
   subs[idx] = { ...sub, next_renewal_date: nextDate, last_reminded_at: null, updated_at: now };
   const renewed = subs[idx];
   render();
+  // Guarded on the date this page saw: when two adults tap at once, only the
+  // first advances the date, and only that one books the charge below.
+  let res;
   try {
-    await db(
-      "UPDATE app_subscriptions__subscriptions SET next_renewal_date=?, last_reminded_at=NULL, updated_at=? WHERE id=?",
-      [nextDate, now, id],
+    res = await db(
+      "UPDATE app_subscriptions__subscriptions SET next_renewal_date=?, last_reminded_at=NULL, updated_at=? WHERE id=? AND next_renewal_date=?",
+      [nextDate, now, id, paidOn],
     );
   } catch (e) { subs[idx] = prev; showError(e.message); return; }
+  if (DB && !Number(res.changed)) {
+    try { await loadSubs(); } catch { subs = subs.map((s) => (s.id === id ? prev : s)); }
+    showError("Someone already marked this renewed.");
+    return;
+  }
 
   // A zero-cost row (a free trial being tracked so it doesn't quietly start
   // billing) has no charge to book, and budget apps reject a zero transaction.
@@ -525,6 +541,19 @@ document.addEventListener("input", (e) => {
 function render() {
   const root = document.getElementById("root");
   root.className = "app-root";
+  if (loadFailed) {
+    // Nothing was read: no zero totals, no "nothing tracked yet", no Add.
+    root.innerHTML = `
+      <div class="topbar">
+        <div>
+          <h1>Subscriptions & Bills</h1>
+          <p class="muted tiny">Everything the household pays for on repeat.</p>
+        </div>
+      </div>
+      <div class="load-error" data-testid="load-error" role="alert"><span>Couldn’t load the subscriptions.</span>
+        <button type="button" class="load-error-retry" data-testid="load-retry">Try again</button></div>`;
+    return;
+  }
   const list = sortedSubscriptions(subs, hubDay());
   const active = subs.filter((s) => s.status === "active");
   root.innerHTML = `
@@ -538,7 +567,7 @@ function render() {
       </div>
       ${canManage() ? `<button class="btn" data-testid="add-subscription" data-add>+ Add</button>` : ""}
     </div>
-    ${error ? `<div class="error">${esc(error)}</div>` : ""}
+    ${error ? `<div class="error" data-testid="error">${esc(error)}</div>` : ""}
     <div class="stats">
       <div class="stat"><span class="v">${esc(fmtMoney(totalMonthlyCents(subs)))}</span><span class="k">Per month</span></div>
       <div class="stat"><span class="v">${esc(fmtMoney(totalYearlyCents(subs)))}</span><span class="k">Per year</span></div>
@@ -724,6 +753,7 @@ function openEditor(existing) {
 document.addEventListener("click", (e) => {
   const t = e.target.closest("button");
   if (!t) return;
+  if (t.matches('[data-testid="load-retry"]')) { refresh(); return; }
   if (t.hasAttribute("data-add")) { openEditor(null); return; }
   if (t.hasAttribute("data-edit")) { openEditor(subs.find((s) => s.id === t.getAttribute("data-edit"))); return; }
   if (t.hasAttribute("data-cancel")) { closeModal(); return; }
