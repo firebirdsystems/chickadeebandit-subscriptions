@@ -161,6 +161,7 @@ let reminderStatus = null; // { entitled, missing_capabilities, bundle } | null 
 let searchQ = "";       // in-app search (see logic.js searchableFields)
 let error = "";
 let modalEl = null;
+let savingForm = null;  // the form whose save is out: it can't be dismissed or re-sent until the write answers
 
 function nowIso() { return new Date().toISOString(); }
 function canManage() { return !!me && isAdult(me); }
@@ -359,11 +360,16 @@ function nudgeInputsChanged(prev, next) {
     .some((k) => String(prev[k] ?? "") !== String(next[k] ?? ""));
 }
 
+/** Writes first, and only then touches the list or the form: a write that
+ *  fails throws to the form's submit handler, which says so in the form and
+ *  leaves what was typed. Closing the form is what releases its save lock, so
+ *  that happens as soon as the write has answered, ahead of the publishes. */
 async function saveSub(fields, existingId) {
   const now = nowIso();
+  const formEl = modalEl;
   if (existingId) {
-    const idx = subs.findIndex((s) => s.id === existingId);
-    const prev = idx !== -1 ? { ...subs[idx] } : null;
+    const before = subs.find((s) => s.id === existingId);
+    const prev = before ? { ...before } : null;
     // A moved renewal date is a NEW occurrence, so the old one's send stamp must
     // not carry over. The hub silences a row whose `last_reminded_at` falls
     // inside the current occurrence's `lead_days + 1` window, so any edit that
@@ -375,35 +381,36 @@ async function saveSub(fields, existingId) {
     // a duplicate: the hub's per-recipient send log still holds the previous
     // occurrence. See migration 003.
     const renewalMoved = !!prev && String(prev.next_renewal_date ?? "") !== String(fields.next_renewal_date ?? "");
+    await db(
+      `UPDATE app_subscriptions__subscriptions SET name=?, category=?, amount_cents=?, billing_period=?, next_renewal_date=?, payer_id=?, status=?, url=?, notes=?, remind=?, lead_days=?, remind_scope=?, ${renewalMoved ? "last_reminded_at=NULL, " : ""}updated_at=? WHERE id=?`,
+      [fields.name, fields.category, fields.amount_cents, fields.billing_period, fields.next_renewal_date, fields.payer_id, fields.status, fields.url, fields.notes, fields.remind, fields.lead_days, fields.remind_scope, now, existingId],
+    );
+    // Looked up again: the list may have changed while the write was out.
+    const idx = subs.findIndex((s) => s.id === existingId);
     if (idx !== -1) {
       subs[idx] = { ...subs[idx], ...fields, updated_at: now };
       if (renewalMoved) subs[idx].last_reminded_at = null;
     }
     const saved = idx !== -1 ? subs[idx] : null;
-    closeModal(); render();
-    try {
-      await db(
-        `UPDATE app_subscriptions__subscriptions SET name=?, category=?, amount_cents=?, billing_period=?, next_renewal_date=?, payer_id=?, status=?, url=?, notes=?, remind=?, lead_days=?, remind_scope=?, ${renewalMoved ? "last_reminded_at=NULL, " : ""}updated_at=? WHERE id=?`,
-        [fields.name, fields.category, fields.amount_cents, fields.billing_period, fields.next_renewal_date, fields.payer_id, fields.status, fields.url, fields.notes, fields.remind, fields.lead_days, fields.remind_scope, now, existingId],
-      );
-    } catch (e) { if (idx !== -1 && prev) subs[idx] = prev; showError(failText(e, "Couldn’t save the subscription — try again.")); return; }
-    // Outside the rollback: the row is committed, so a failed publish (a 429,
-    // say) must not put the pre-edit values back on screen. The nudge is a
-    // best-effort side effect — announceRenewalSafely says so out loud.
+    if (modalEl === formEl) closeModal();
+    render();
+    // The row is committed, so a failed publish (a 429, say) must not make the
+    // save look failed. The nudge is a best-effort side effect —
+    // announceRenewalSafely says so out loud.
     if (saved && nudgeInputsChanged(prev, saved)) await syncRenewalNudge(prev, saved);
   } else {
     const row = { id: crypto.randomUUID(), ...fields, last_reminded_at: null, created_by: me.id, created_at: now, updated_at: now };
-    subs = [...subs, row];
-    closeModal(); render();
-    try {
-      await db(
-        "INSERT INTO app_subscriptions__subscriptions (id, name, category, amount_cents, billing_period, next_renewal_date, payer_id, status, url, notes, remind, lead_days, remind_scope, created_by, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-        [row.id, row.name, row.category, row.amount_cents, row.billing_period, row.next_renewal_date, row.payer_id, row.status, row.url, row.notes, row.remind, row.lead_days, row.remind_scope, row.created_by, now, now],
-      );
-    } catch (e) { subs = subs.filter((s) => s.id !== row.id); showError(failText(e, "Couldn’t save the subscription — try again.")); return; }
+    await db(
+      "INSERT INTO app_subscriptions__subscriptions (id, name, category, amount_cents, billing_period, next_renewal_date, payer_id, status, url, notes, remind, lead_days, remind_scope, created_by, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+      [row.id, row.name, row.category, row.amount_cents, row.billing_period, row.next_renewal_date, row.payer_id, row.status, row.url, row.notes, row.remind, row.lead_days, row.remind_scope, row.created_by, now, now],
+    );
+    // Filtered first: a list re-read that was already out may have brought it.
+    subs = [...subs.filter((x) => x.id !== row.id), row];
+    if (modalEl === formEl) closeModal();
+    render();
     // Same rule as the edit branch, and it matters more here: the INSERT has
-    // committed, so unwinding the local row on a publish failure would hide a
-    // subscription that exists and invite the user to add it a second time.
+    // committed, so a publish failure must not hide a subscription that exists
+    // and invite the user to add it a second time.
     await publishSafely("subscription.added", row.id, {
       category: row.category,
       amount_cents: row.amount_cents,
@@ -590,10 +597,10 @@ function openModal(html) {
   modalEl = document.createElement("div");
   modalEl.className = "overlay";
   modalEl.innerHTML = `<div class="modal">${html}</div>`;
-  modalEl.addEventListener("click", (e) => { if (e.target === modalEl) closeModal(); });
+  modalEl.addEventListener("click", (e) => { if (e.target === modalEl && savingForm !== modalEl) closeModal(); });
   document.body.appendChild(modalEl);
 }
-function closeModal() { modalEl?.remove(); modalEl = null; }
+function closeModal() { if (savingForm === modalEl) savingForm = null; modalEl?.remove(); modalEl = null; }
 
 /** The lead-time picker doubles as the on/off switch, so "warn me about this
  *  one" is a single decision: "No reminder" means remind = 0, any number is a
@@ -622,6 +629,7 @@ function leadNote() {
 }
 
 function openEditor(existing) {
+  if (savingForm) return; // a save is still out; its form stays until the write answers
   const s = existing ?? null;
   const scopeOptions = REMIND_SCOPES.map((r) => `<option value="${r.value}" ${(s?.remind_scope ?? "payer") === r.value ? "selected" : ""}>${esc(r.label)}</option>`).join("");
   const catOptions = CATEGORIES.map((c) => `<option value="${c.value}" ${s?.category === c.value ? "selected" : ""}>${c.label}</option>`).join("");
@@ -655,6 +663,7 @@ function openEditor(existing) {
       <p class="muted tiny" id="lead-note" style="margin-top:-4px">${esc(leadNote())}</p>
       <div class="field"><label for="f-url">Manage / cancel link <span class="muted" style="text-transform:none">(optional)</span></label><input id="f-url" value="${esc(s?.url ?? "")}" placeholder="https://…" /></div>
       <div class="field"><label for="f-notes">Notes</label><textarea id="f-notes">${esc(s?.notes ?? "")}</textarea></div>
+      <div class="error" id="form-error" data-testid="form-error" role="alert" hidden></div>
       <div class="modal-actions">
         ${s ? `<button type="button" class="btn btn-danger modal-left" data-testid="sub-delete" data-delete="${esc(s.id)}">Delete</button>` : ""}
         <button type="button" class="btn btn-ghost" data-testid="sub-cancel" data-cancel>Cancel</button>
@@ -718,18 +727,26 @@ function openEditor(existing) {
   });
   modalEl.querySelector("#sub-form").addEventListener("submit", (e) => {
     e.preventDefault();
+    if (savingForm) return;
     const name = document.getElementById("f-name").value.trim();
     if (!name) { document.getElementById("f-name").focus(); return; }
     const cents = parseMoneyToCents(document.getElementById("f-amount").value);
     if (cents == null) { showError("Amount must be a dollar amount like 15.49."); return; }
     const nextDate = document.getElementById("f-next").value;
     if (!nextDate) { document.getElementById("f-next").focus(); return; }
-    const btn = modalEl?.querySelector('button[type="submit"]');
-    if (btn) { btn.disabled = true; btn.textContent = "Saving…"; }
+    // The form this save belongs to. It stays open, as typed, until the write
+    // has answered. Every button is off meanwhile (Cancel too, and the backdrop
+    // via `savingForm`): the list is not drawn ahead of the answer, so a form
+    // dismissed mid-save would look like nothing was saved and get typed again.
+    const formModal = modalEl;
+    const btn = formModal?.querySelector('button[type="submit"]');
+    const buttons = [...(formModal?.querySelectorAll("button") ?? [])];
+    const errEl = formModal?.querySelector("#form-error");
+    if (errEl) { errEl.hidden = true; errEl.textContent = ""; }
     const period = document.getElementById("f-period").value;
     const leadValue = document.getElementById("f-lead").value;
     const status = document.getElementById("f-status").value;
-    saveSub({
+    const fields = {
       name,
       category: document.getElementById("f-cat").value,
       amount_cents: cents,
@@ -750,7 +767,25 @@ function openEditor(existing) {
       // lead time the household last chose instead of silently resetting.
       lead_days: clampLeadDays(leadValue === "off" ? (s?.lead_days ?? DEFAULT_LEAD_DAYS) : leadValue, period),
       remind_scope: document.getElementById("f-scope").value,
-    }, s?.id ?? null).catch((err) => showError(failText(err, "Couldn’t save the subscription — try again.")));
+    };
+    savingForm = formModal;
+    buttons.forEach((b) => { b.disabled = true; });
+    if (btn) btn.textContent = "Saving…";
+    saveSub(fields, s?.id ?? null).catch((err) => {
+      const msg = failText(err, "Couldn’t save the subscription — try again.");
+      // In the form when it is still up (the page's own error line sits behind
+      // the overlay); on the page when the user has already left the form.
+      if (errEl && modalEl === formModal) { errEl.textContent = msg; errEl.hidden = false; }
+      else showError(msg);
+    }).finally(() => {
+      // Only this form's own lock: a saved form has already released it (in
+      // closeModal, before the publishes), and a later form may hold it by now.
+      if (savingForm === formModal) savingForm = null;
+      buttons.forEach((b) => { b.disabled = false; });
+      if (btn) btn.textContent = s ? "Save" : "Add";
+      // Disabling the pressed button dropped focus to the page behind.
+      if (modalEl === formModal) btn?.focus();
+    });
   });
 }
 
