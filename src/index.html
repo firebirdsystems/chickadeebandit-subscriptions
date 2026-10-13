@@ -381,10 +381,17 @@ async function saveSub(fields, existingId) {
     // a duplicate: the hub's per-recipient send log still holds the previous
     // occurrence. See migration 003.
     const renewalMoved = !!prev && String(prev.next_renewal_date ?? "") !== String(fields.next_renewal_date ?? "");
-    await db(
+    const res = await db(
       `UPDATE app_subscriptions__subscriptions SET name=?, category=?, amount_cents=?, billing_period=?, next_renewal_date=?, payer_id=?, status=?, url=?, notes=?, remind=?, lead_days=?, remind_scope=?, ${renewalMoved ? "last_reminded_at=NULL, " : ""}updated_at=? WHERE id=?`,
       [fields.name, fields.category, fields.amount_cents, fields.billing_period, fields.next_renewal_date, fields.payer_id, fields.status, fields.url, fields.notes, fields.remind, fields.lead_days, fields.remind_scope, now, existingId],
     );
+    // No row took the write (deleted meanwhile, or refused): nothing was saved,
+    // so nothing is merged or published. The list behind the form is re-read
+    // and the form says so, as typed.
+    if (DB && !Number(res.changed)) {
+      try { await loadSubs(); render(); } catch { /* the list stays as it was */ }
+      throw Object.assign(new Error("This subscription wasn’t saved — it may have been deleted."), { forUser: true });
+    }
     // Looked up again: the list may have changed while the write was out.
     const idx = subs.findIndex((s) => s.id === existingId);
     if (idx !== -1) {
@@ -728,10 +735,13 @@ function openEditor(existing) {
   modalEl.querySelector("#sub-form").addEventListener("submit", (e) => {
     e.preventDefault();
     if (savingForm) return;
+    const errEl = modalEl?.querySelector("#form-error");
+    if (errEl) { errEl.hidden = true; errEl.textContent = ""; }
     const name = document.getElementById("f-name").value.trim();
     if (!name) { document.getElementById("f-name").focus(); return; }
     const cents = parseMoneyToCents(document.getElementById("f-amount").value);
-    if (cents == null) { showError("Amount must be a dollar amount like 15.49."); return; }
+    // In the form: the page's own error line sits behind the overlay.
+    if (cents == null) { if (errEl) { errEl.textContent = "Amount must be a dollar amount like 15.49."; errEl.hidden = false; } return; }
     const nextDate = document.getElementById("f-next").value;
     if (!nextDate) { document.getElementById("f-next").focus(); return; }
     // The form this save belongs to. It stays open, as typed, until the write
@@ -741,8 +751,6 @@ function openEditor(existing) {
     const formModal = modalEl;
     const btn = formModal?.querySelector('button[type="submit"]');
     const buttons = [...(formModal?.querySelectorAll("button") ?? [])];
-    const errEl = formModal?.querySelector("#form-error");
-    if (errEl) { errEl.hidden = true; errEl.textContent = ""; }
     const period = document.getElementById("f-period").value;
     const leadValue = document.getElementById("f-lead").value;
     const status = document.getElementById("f-status").value;
