@@ -305,3 +305,65 @@ export function parseMoneyToCents(raw) {
 export function searchableFields(item) {
   return [item.name, item.category, item.notes, item.url];
 }
+
+/**
+ * The line a failed write shows ("refused, gone, or failed"). "Try again" is
+ * said only when trying again can work; a refusal says what happened. Decided
+ * from the error's `status` / `code`, never from the hub's text. Whether a
+ * write that changed nothing found its row gone, refused or changed is the
+ * caller's call after its re-read: pass `outcome: "removed"`, `"refused"` (a
+ * plain `WHERE id = ?` write whose row is still there: the row policy turned
+ * it away) or `"changed"` (only for a guarded write). A failed re-read passes
+ * no outcome: try again.
+ */
+export function failureLine(e, { action, thing, outcome = "" }) {
+  const status = Number(e?.status) || 0;
+  if (e?.code === "UNIQUE_CONSTRAINT" || /UNIQUE constraint failed/i.test(String(e?.message ?? ""))) return `That ${thing} already exists.`;
+  if (status === 403 || outcome === "refused") return `You don’t have permission to ${action}.`;
+  if (status === 507) return "The household’s storage is full — free up space first.";
+  if (outcome === "removed" || status === 404) return `This ${thing} has been removed.`;
+  if (outcome === "changed" || status === 409) return `This ${thing} was changed by someone else — check it first.`;
+  return `Couldn’t ${action} — try again.`;
+}
+
+/**
+ * What the re-read says about a renew mark whose answer was lost or changed
+ * nothing. The UPDATE is guarded on the date the page saw (`paidOn`) and
+ * stamps `updated_at` with a value pinned for this one action (`stamp`):
+ * - "landed": the stored stamp is ours and the date moved off `paidOn` — our
+ *   write was stored, so the success path runs (once). The date stored may be
+ *   an earlier try's (the stamp is kept across a day boundary that changed the
+ *   new date), so it is read from the row, not from `nextDate`;
+ * - "removed": no row;
+ * - "renewed": the date moved off `paidOn` by someone else's write;
+ * - "unchanged": the row still holds `paidOn` — nothing was stored.
+ */
+export function renewOutcome(stored, { stamp, paidOn, nextDate }) {
+  if (!stored) return "removed";
+  if (stored.updated_at === stamp && (String(stored.next_renewal_date) === String(nextDate)
+    || String(stored.next_renewal_date) !== String(paidOn))) return "landed";
+  if (String(stored.next_renewal_date) !== String(paidOn)) return "renewed";
+  return "unchanged";
+}
+
+/**
+ * Whether a failed write may nonetheless have been stored ("retry after a lost
+ * response"). No status: the request threw before any answer. A 400: the hub's
+ * answer for a write that timed out after it may have been stored, and for a
+ * second press that met the first one's row. A 5xx other than 507: the hub
+ * failing on its side, possibly after the write. Anything else is a refusal
+ * that stored nothing.
+ */
+export function outcomeUnknown(e) {
+  const status = Number(e?.status) || 0;
+  return status === 0 || status === 400 || (status >= 500 && status !== 507);
+}
+
+/**
+ * Whether a stored row differs from what the form holds now, over the form's
+ * own columns only. Compared as text, with a missing value as empty: a stored
+ * `7` and a typed `"7"` are the same, as are `null` and `""`.
+ */
+export function storedDiffers(row, fields) {
+  return Object.keys(fields).some((k) => String(row?.[k] ?? "") !== String(fields[k] ?? ""));
+}

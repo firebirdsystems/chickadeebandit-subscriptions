@@ -125,7 +125,8 @@ import {
   CATEGORIES, PERIODS, REMIND_SCOPES, DEFAULT_LEAD_DAYS, categoryMeta, periodMeta, totalMonthlyCents,
   totalYearlyCents, sortedSubscriptions, renewalLabel, advanceRenewal, parseMoneyToCents, searchableFields,
   clampLeadDays, leadChoicesFor, remindOnDate, reviewTitle, reviewSummary, renewalDescription,
-  wantsRenewalNudge, nudgeRetractionReason, shortDate,
+  wantsRenewalNudge, nudgeRetractionReason, shortDate, failureLine, renewOutcome,
+  outcomeUnknown, storedDiffers,
 } from "./logic.js";
 
 const CONTEXT = window.__CONTEXT_URL ?? "";
@@ -181,14 +182,19 @@ async function db(sql, params = []) {
     body: JSON.stringify({ sql, params }),
   });
   const json = await res.json().catch(() => null);
-  if (!res.ok || !json || typeof json !== "object" || json.error) throw new Error(json?.error || "Couldn’t reach the hub. Try again.");
+  // `status` and `code` ride on the error: the failure line depends on them.
+  if (!res.ok || !json || typeof json !== "object" || json.error) throw Object.assign(new Error(json?.error || "Couldn’t reach the hub. Try again."), { status: res.status, code: json?.code });
   return json;
 }
 
-// A failed write shows one fixed line for the action. Only wording this app
-// wrote for the reader (marked `forUser` where it is thrown) is shown as is;
-// the hub's own error text goes to the console.
-function failText(e, line) { if (!e?.forUser) console.error(e); return e?.forUser ? e.message : line; }
+// A failed write shows a line for the action chosen from its status
+// (`failureLine`: refused, gone, or try again). Only wording this app wrote for
+// the reader (marked `forUser` where it is thrown) is shown as is; the hub's
+// own error text goes to the console.
+function failText(e, what) { if (!e?.forUser) console.error(e); return e?.forUser ? e.message : failureLine(e, what); }
+const SAVE = { action: "save the subscription", thing: "subscription" };
+const DELETE = { action: "delete the subscription", thing: "subscription" };
+const RENEW = { action: "mark it renewed", thing: "subscription" };
 
 /* ── Loading ───────────────────────────────────────────────────────────────── */
 async function loadMembers() {
@@ -389,8 +395,12 @@ async function saveSub(fields, existingId) {
     // so nothing is merged or published. The list behind the form is re-read
     // and the form says so, as typed.
     if (DB && !Number(res.changed)) {
-      try { await loadSubs(); render(); } catch { /* the list stays as it was */ }
-      throw Object.assign(new Error("This subscription wasn’t saved — it may have been deleted."), { forUser: true });
+      // The re-read says which: gone, or (a row still there after this plain
+      // `WHERE id = ?` write) refused by the row policy. A list that could not
+      // be read says neither, so the line stays "try again".
+      let outcome = "";
+      try { await loadSubs(); render(); outcome = subs.some((x) => x.id === existingId) ? "refused" : "removed"; } catch { /* the list stays as it was */ }
+      throw Object.assign(new Error(failureLine(null, { ...SAVE, outcome })), { forUser: true });
     }
     // Looked up again: the list may have changed while the write was out.
     const idx = subs.findIndex((s) => s.id === existingId);
@@ -406,11 +416,33 @@ async function saveSub(fields, existingId) {
     // announceRenewalSafely says so out loud.
     if (saved && nudgeInputsChanged(prev, saved)) await syncRenewalNudge(prev, saved);
   } else {
-    const row = { id: crypto.randomUUID(), ...fields, last_reminded_at: null, created_by: me.id, created_at: now, updated_at: now };
-    await db(
-      "INSERT INTO app_subscriptions__subscriptions (id, name, category, amount_cents, billing_period, next_renewal_date, payer_id, status, url, notes, remind, lead_days, remind_scope, created_by, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-      [row.id, row.name, row.category, row.amount_cents, row.billing_period, row.next_renewal_date, row.payer_id, row.status, row.url, row.notes, row.remind, row.lead_days, row.remind_scope, row.created_by, now, now],
-    );
+    // The id is the form's, minted on its first Save and sent on every retry:
+    // a try whose answer was lost may have stored the row, and a second press
+    // must find that row rather than add another.
+    const id = formEl ? (formEl.dataset.rowId ??= crypto.randomUUID()) : crypto.randomUUID();
+    let row = { id, ...fields, last_reminded_at: null, created_by: me.id, created_at: now, updated_at: now };
+    let note = "";
+    try {
+      await db(
+        "INSERT INTO app_subscriptions__subscriptions (id, name, category, amount_cents, billing_period, next_renewal_date, payer_id, status, url, notes, remind, lead_days, remind_scope, created_by, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        [row.id, row.name, row.category, row.amount_cents, row.billing_period, row.next_renewal_date, row.payer_id, row.status, row.url, row.notes, row.remind, row.lead_days, row.remind_scope, row.created_by, now, now],
+      );
+    } catch (e) {
+      // Unknown outcome: read the row back by the pinned id. Found means an
+      // earlier try landed and its success path never ran, so it runs now, once,
+      // with the row as stored. Not found, or the read failed: the save fails as
+      // before and the id stays pinned for the next press.
+      if (!outcomeUnknown(e)) throw e;
+      let stored = null;
+      try { stored = (await db("SELECT * FROM app_subscriptions__subscriptions WHERE id = ?", [id])).rows?.[0] ?? null; }
+      catch (readErr) { console.error(readErr); }
+      if (!stored) throw e;
+      console.error(e);
+      // Edited since that first try: what was stored is kept, and said so.
+      if (storedDiffers(stored, fields)) note = "Saved as first entered — check it and update what changed.";
+      row = stored;
+    }
+    if (formEl) delete formEl.dataset.rowId;
     // Filtered first: a list re-read that was already out may have brought it.
     subs = [...subs.filter((x) => x.id !== row.id), row];
     if (modalEl === formEl) closeModal();
@@ -426,6 +458,9 @@ async function saveSub(fields, existingId) {
       name: row.name,
     });
     await announceRenewalSafely(row);
+    // Last, so a publish's own note cannot cover it: the user's edits since the
+    // first try were not stored.
+    if (note) showError(note);
   }
 }
 
@@ -438,13 +473,28 @@ async function deleteSub(id) {
   const doomed = subs.find((s) => s.id === id);
   subs = subs.filter((s) => s.id !== id);
   closeModal(); render();
-  try { await db("DELETE FROM app_subscriptions__subscriptions WHERE id = ?", [id]); }
-  catch (e) { subs = prev; showError(failText(e, "Couldn’t delete the subscription — try again.")); return; }
+  let res;
+  try { res = await db("DELETE FROM app_subscriptions__subscriptions WHERE id = ?", [id]); }
+  catch (e) { subs = prev; showError(failText(e, DELETE)); return; }
+  // Nothing deleted: the re-read says why. No row: removed already. A row still there: the row policy refused
+  // this plain `WHERE id = ?` delete. A failed re-read says neither.
+  if (DB && !Number(res.changed)) {
+    let outcome = "";
+    try { await loadSubs(); outcome = subs.some((s) => s.id === id) ? "refused" : "removed"; } catch { subs = prev; }
+    showError(failureLine(null, { ...DELETE, outcome }));
+    // Gone may be this delete's own earlier try whose answer was lost, which
+    // never reached the retraction below: it still runs (harmless twice).
+    if (outcome !== "removed") return;
+  }
   // After the DELETE commits, and not before: a retraction published for a row
   // that then failed to delete would strand the subscription in the list with
   // its calendar entry already gone.
   if (doomed && wantsRenewalNudge(doomed)) await retractRenewalSafely(doomed, "deleted");
 }
+
+/** The pinned `updated_at` and new date of each renew action still awaiting
+ *  its outcome, keyed by subscription id and the date it was renewed from. */
+const renewStamps = new Map();
 
 /** Roll an overdue/current renewal forward one period (adults only). */
 async function markRenewed(id) {
@@ -452,8 +502,20 @@ async function markRenewed(id) {
   if (idx === -1) return;
   const sub = subs[idx];
   const paidOn = sub.next_renewal_date;
-  const nextDate = advanceRenewal(paidOn, sub.billing_period, hubDay());
-  const now = nowIso();
+  // One stamp (and new date) per renew action, kept across its retries until
+  // the outcome is known: a try whose answer was lost and whose re-read also
+  // failed may have been stored, and the retry's re-read must still recognise
+  // it as ours.
+  // A pin whose new date no longer follows (the period was edited, or days
+  // have passed) takes the date that follows now, but keeps its stamp: an
+  // earlier try that landed unheard is still recognised as ours by it.
+  const pinKey = `${id}|${paidOn}`;
+  const fresh = advanceRenewal(paidOn, sub.billing_period, hubDay());
+  const kept = renewStamps.get(pinKey);
+  const pin = { now: kept?.now ?? nowIso(), nextDate: fresh };
+  renewStamps.set(pinKey, pin);
+  const { now } = pin;
+  let { nextDate } = pin;
   const prev = sub;
   // last_reminded_at is cleared with the date it belonged to: the hub silences
   // a row whose stamp sits inside the current occurrence's window, and for a
@@ -461,22 +523,48 @@ async function markRenewed(id) {
   // per-recipient send log still holds the old occurrence, so this can't
   // resend it — see migration 003.
   subs[idx] = { ...sub, next_renewal_date: nextDate, last_reminded_at: null, updated_at: now };
-  const renewed = subs[idx];
+  let renewed = subs[idx];
   render();
   // Guarded on the date this page saw: when two adults tap at once, only the
-  // first advances the date, and only that one books the charge below.
-  let res;
+  // first advances the date, and only that one books the charge below. `now`
+  // is this action's pinned stamp: a re-read that finds it stored with the new
+  // date proves this write landed even when its answer did not arrive.
+  let res, err = null;
   try {
     res = await db(
       "UPDATE app_subscriptions__subscriptions SET next_renewal_date=?, last_reminded_at=NULL, updated_at=? WHERE id=? AND next_renewal_date=?",
       [nextDate, now, id, paidOn],
     );
-  } catch (e) { subs[idx] = prev; showError(failText(e, "Couldn’t mark it renewed — try again.")); return; }
-  if (DB && !Number(res.changed)) {
-    try { await loadSubs(); } catch { subs = subs.map((s) => (s.id === id ? prev : s)); }
-    showError("Someone already marked this renewed.");
-    return;
+  } catch (e) { err = e; }
+  // No answer, a 400 or a 5xx other than 507: the write may have been stored.
+  const unknown = !!err && outcomeUnknown(err);
+  if (err && !unknown) { renewStamps.delete(pinKey); subs[idx] = prev; showError(failText(err, RENEW)); return; }
+  if (err || (DB && !Number(res.changed))) {
+    if (err) console.error(err);
+    let outcome = "";
+    try { await loadSubs(); outcome = renewOutcome(subs.find((s) => s.id === id), { stamp: now, paidOn, nextDate }); }
+    catch { subs = subs.map((s) => (s.id === id ? prev : s)); }
+    // Still unknown (a failed re-read, or a lost answer that left the date as
+    // it was): the stamp stays pinned for the retry. Anything else is settled.
+    if (!(outcome === "" || (outcome === "unchanged" && err))) renewStamps.delete(pinKey);
+    if (outcome !== "landed") {
+      // "unchanged" after `changed: 0` is the row policy refusing it; after a
+      // lost answer it is a write that never arrived, and a failed re-read says
+      // nothing either way: both try again.
+      showError(outcome === "renewed" ? "Someone already marked this renewed."
+        : outcome === "removed" ? failureLine(null, { ...RENEW, outcome: "removed" })
+        : outcome === "unchanged" && !err ? failureLine(null, { ...RENEW, outcome: "refused" })
+        : failureLine(null, RENEW));
+      return;
+    }
+    // Stored by this action: the re-read list already shows it; the success
+    // path below runs once, as it would have, with the date as stored (an
+    // earlier try's, when a day boundary has moved the new date since).
+    renewed = subs.find((s) => s.id === id);
+    nextDate = renewed.next_renewal_date;
+    render();
   }
+  renewStamps.delete(pinKey);
 
   // A zero-cost row (a free trial being tracked so it doesn't quietly start
   // billing) has no charge to book, and budget apps reject a zero transaction.
@@ -780,7 +868,7 @@ function openEditor(existing) {
     buttons.forEach((b) => { b.disabled = true; });
     if (btn) btn.textContent = "Saving…";
     saveSub(fields, s?.id ?? null).catch((err) => {
-      const msg = failText(err, "Couldn’t save the subscription — try again.");
+      const msg = failText(err, SAVE);
       // In the form when it is still up (the page's own error line sits behind
       // the overlay); on the page when the user has already left the form.
       if (errEl && modalEl === formModal) { errEl.textContent = msg; errEl.hidden = false; }
@@ -806,7 +894,7 @@ document.addEventListener("click", (e) => {
   if (t.hasAttribute("data-edit")) { openEditor(subs.find((s) => s.id === t.getAttribute("data-edit"))); return; }
   if (t.hasAttribute("data-cancel")) { closeModal(); return; }
   if (t.hasAttribute("data-delete")) { deleteSub(t.getAttribute("data-delete")); return; }
-  if (t.hasAttribute("data-renewed")) { markRenewed(t.getAttribute("data-renewed")).catch((err) => showError(failText(err, "Couldn’t mark it renewed — try again."))); return; }
+  if (t.hasAttribute("data-renewed")) { markRenewed(t.getAttribute("data-renewed")).catch((err) => showError(failText(err, RENEW))); return; }
 });
 
 refresh();

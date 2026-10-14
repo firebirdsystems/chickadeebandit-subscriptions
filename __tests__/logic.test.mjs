@@ -3,7 +3,8 @@ import {
   categoryMeta, periodMeta, monthlyCostCents, totalMonthlyCents, totalYearlyCents,
   daysUntilDate, advanceRenewal, renewalLabel, sortedSubscriptions, parseMoneyToCents, searchableFields,
   maxLeadDays, clampLeadDays, leadChoicesFor, remindOnDate, shortDate, reviewTitle,
-  reviewSummary, renewalDescription, wantsRenewalNudge, nudgeRetractionReason, DEFAULT_LEAD_DAYS,
+  reviewSummary, renewalDescription, wantsRenewalNudge, nudgeRetractionReason, DEFAULT_LEAD_DAYS, failureLine, renewOutcome,
+  outcomeUnknown, storedDiffers,
 } from "../src/logic.js";
 
 const FROM = new Date(2026, 6, 12, 9, 0, 0); // July 12, 2026 local
@@ -226,5 +227,84 @@ describe("searchableFields", () => {
     });
     expect(fields).toContain("streaming");
     expect(fields).toContain("shared with Ada, cancel by June");
+  });
+});
+
+describe("failureLine", () => {
+  const o = { action: "save the subscription", thing: "subscription" };
+  const err = (props, message = "hub text") => Object.assign(new Error(message), props);
+  it("already there: by code, or the text as a fallback", () => {
+    expect(failureLine(err({ status: 400, code: "UNIQUE_CONSTRAINT" }), o)).toBe("That subscription already exists.");
+    expect(failureLine(err({ status: 400 }, "UNIQUE constraint failed: x.id"), o)).toBe("That subscription already exists.");
+  });
+  it("not allowed (403)", () => {
+    expect(failureLine(err({ status: 403 }), o)).toBe("You don’t have permission to save the subscription.");
+  });
+  it("storage full (507)", () => {
+    expect(failureLine(err({ status: 507 }), o)).toBe("The household’s storage is full — free up space first.");
+  });
+  it("removed: 404, or a re-read that found no row", () => {
+    expect(failureLine(err({ status: 404 }), o)).toBe("This subscription has been removed.");
+    expect(failureLine(null, { ...o, outcome: "removed" })).toBe("This subscription has been removed.");
+  });
+  it("changed by someone else: 409, or a re-read that found it changed", () => {
+    expect(failureLine(err({ status: 409 }), o)).toBe("This subscription was changed by someone else — check it first.");
+    expect(failureLine(null, { ...o, outcome: "changed" })).toBe("This subscription was changed by someone else — check it first.");
+  });
+  it("refused quietly: a plain write that changed nothing while the row is still there", () => {
+    expect(failureLine(null, { ...o, outcome: "refused" })).toBe("You don’t have permission to save the subscription.");
+    expect(failureLine(null, { action: "delete the subscription", thing: "subscription", outcome: "refused" })).toBe("You don’t have permission to delete the subscription.");
+  });
+  it("changed: 0 and a failed re-read: try again, neither removed nor changed", () => {
+    expect(failureLine(null, { ...o, outcome: "" })).toBe("Couldn’t save the subscription — try again.");
+  });
+  it("no answer, a 5xx or a plain 400: try again, never the hub's text", () => {
+    for (const e of [new Error("Failed to fetch"), err({ status: 503 }), err({ status: 500 }), err({ status: 400 }), undefined]) {
+      expect(failureLine(e, o)).toBe("Couldn’t save the subscription — try again.");
+    }
+  });
+});
+
+describe("renewOutcome", () => {
+  const pin = { stamp: "2026-10-13T10:00:00.000Z", paidOn: "2026-10-10", nextDate: "2026-11-10" };
+  it("landed: our pinned stamp stored with the new date", () => {
+    expect(renewOutcome({ next_renewal_date: "2026-11-10", updated_at: pin.stamp }, pin)).toBe("landed");
+  });
+  it("removed: no row", () => {
+    expect(renewOutcome(undefined, pin)).toBe("removed");
+  });
+  it("renewed: the date moved under someone else's stamp", () => {
+    expect(renewOutcome({ next_renewal_date: "2026-11-10", updated_at: "2026-10-13T09:59:00.000Z" }, pin)).toBe("renewed");
+    expect(renewOutcome({ next_renewal_date: "2028-10-10", updated_at: "2026-01-02T00:00:00.000Z" }, pin)).toBe("renewed");
+  });
+  it("unchanged: the row still holds the date this page saw", () => {
+    expect(renewOutcome({ next_renewal_date: "2026-10-10", updated_at: "2026-01-01T00:00:00.000Z" }, pin)).toBe("unchanged");
+  });
+  it("landed: our kept stamp with an earlier try's date (a day boundary moved the new date since)", () => {
+    expect(renewOutcome({ next_renewal_date: "2026-11-10", updated_at: pin.stamp }, { ...pin, nextDate: "2026-12-10" })).toBe("landed");
+  });
+  it("landed: our stamp with the new date even when it equals the date seen (a future renewal)", () => {
+    expect(renewOutcome({ next_renewal_date: "2026-10-10", updated_at: pin.stamp }, { ...pin, nextDate: "2026-10-10" })).toBe("landed");
+  });
+});
+
+describe("outcomeUnknown", () => {
+  it("no status, a 400, or a 5xx other than 507: may have been stored", () => {
+    for (const e of [new Error("Failed to fetch"), { status: 400 }, { status: 500 }, { status: 503 }, undefined]) {
+      expect(outcomeUnknown(e)).toBe(true);
+    }
+  });
+  it("a refusal stored nothing", () => {
+    for (const status of [403, 404, 409, 507]) expect(outcomeUnknown({ status })).toBe(false);
+  });
+});
+
+describe("storedDiffers", () => {
+  const fields = { name: "Streamly", amount_cents: 1549, lead_days: 7, url: "" };
+  it("same as stored, compared as text, null as empty", () => {
+    expect(storedDiffers({ name: "Streamly", amount_cents: "1549", lead_days: 7, url: null, extra: "x" }, fields)).toBe(false);
+  });
+  it("a form edited since the first try", () => {
+    expect(storedDiffers({ name: "Streamly", amount_cents: 1499, lead_days: 7, url: "" }, fields)).toBe(true);
   });
 });

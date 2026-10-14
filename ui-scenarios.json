@@ -141,7 +141,7 @@
 
         { "action": "fault", "mode": "noop" },
         { "action": "click", "selector": "[data-testid=\"mark-renewed\"][data-sub-id=\"s-refused\"]" },
-        { "action": "expectText", "text": "Someone already marked this renewed.", "selector": "[data-testid=\"error\"]" },
+        { "action": "expectText", "text": "You don’t have permission to mark it renewed.", "selector": "[data-testid=\"error\"]" },
         { "action": "expectCount", "selector": "[data-testid=\"mark-renewed\"][data-sub-id=\"s-refused\"]", "count": 1 },
 
         { "action": "fault", "mode": "none" },
