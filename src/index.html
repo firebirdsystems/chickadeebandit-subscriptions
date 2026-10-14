@@ -162,7 +162,6 @@ let reminderStatus = null; // { entitled, missing_capabilities, bundle } | null 
 let searchQ = "";       // in-app search (see logic.js searchableFields)
 let error = "";
 let modalEl = null;
-let savingForm = null;  // the form whose save is out: it can't be dismissed or re-sent until the write answers
 
 function nowIso() { return new Date().toISOString(); }
 function canManage() { return !!me && isAdult(me); }
@@ -368,8 +367,8 @@ function nudgeInputsChanged(prev, next) {
 
 /** Writes first, and only then touches the list or the form: a write that
  *  fails throws to the form's submit handler, which says so in the form and
- *  leaves what was typed. Closing the form is what releases its save lock, so
- *  that happens as soon as the write has answered, ahead of the publishes. */
+ *  leaves what was typed. A confirmed save is drawn from the saved values at
+ *  once, ahead of the publishes, and the list is re-read last. */
 async function saveSub(fields, existingId) {
   const now = nowIso();
   const formEl = modalEl;
@@ -415,6 +414,7 @@ async function saveSub(fields, existingId) {
     // save look failed. The nudge is a best-effort side effect —
     // announceRenewalSafely says so out loud.
     if (saved && nudgeInputsChanged(prev, saved)) await syncRenewalNudge(prev, saved);
+    await rereadAfterSave();
   } else {
     // The id is the form's, minted on its first Save and sent on every retry:
     // a try whose answer was lost may have stored the row, and a second press
@@ -435,7 +435,12 @@ async function saveSub(fields, existingId) {
       if (!outcomeUnknown(e)) throw e;
       let stored = null;
       try { stored = (await db("SELECT * FROM app_subscriptions__subscriptions WHERE id = ?", [id])).rows?.[0] ?? null; }
-      catch (readErr) { console.error(readErr); }
+      catch (readErr) {
+        // The id is ours: with the read-back failed, a UNIQUE answer may be this
+        // form's own first try, so nothing is known — "try again", not "already exists".
+        console.error(readErr);
+        throw new Error("create outcome unknown", { cause: e });
+      }
       if (!stored) throw e;
       console.error(e);
       // Edited since that first try: what was stored is kept, and said so.
@@ -458,46 +463,90 @@ async function saveSub(fields, existingId) {
       name: row.name,
     });
     await announceRenewalSafely(row);
+    await rereadAfterSave();
     // Last, so a publish's own note cannot cover it: the user's edits since the
     // first try were not stored.
     if (note) showError(note);
   }
 }
 
+/** The re-read after a confirmed save. It is not the save: failing, it keeps
+ *  the list as drawn from the saved values (loadSubs assigns only on success). */
+async function rereadAfterSave() {
+  if (!DB) return; // the demo list is seeded, not read: a re-read would drop the save
+  try { await loadSubs(); render(); } catch (e) { console.error(e); }
+}
+
 async function deleteSub(id) {
+  // The editor this Delete was pressed in. It stays open, as typed, until the
+  // hub has answered, with Save and Delete off; a failure is said in it, and
+  // success closes it and no other.
+  const editor = modalEl;
+  if (editor?.dataset.saving) return;
   const ok = await hubConfirm({ message: "Delete this subscription?", confirmLabel: "Delete", destructive: true });
   if (!ok) return;
-  const prev = subs;
-  // Captured before the local list drops it: the retraction needs the row's
-  // name, and whether it had a calendar entry to retract at all.
+  if (editor?.dataset.saving) return;
+  // Captured before the write: the retraction needs the row's name, and
+  // whether it had a calendar entry to retract at all.
   const doomed = subs.find((s) => s.id === id);
-  subs = subs.filter((s) => s.id !== id);
-  closeModal(); render();
-  let res;
-  try { res = await db("DELETE FROM app_subscriptions__subscriptions WHERE id = ?", [id]); }
-  catch (e) { subs = prev; showError(failText(e, DELETE)); return; }
-  // Nothing deleted: the re-read says why. No row: removed already. A row still there: the row policy refused
-  // this plain `WHERE id = ?` delete. A failed re-read says neither.
-  if (DB && !Number(res.changed)) {
-    let outcome = "";
-    try { await loadSubs(); outcome = subs.some((s) => s.id === id) ? "refused" : "removed"; } catch { subs = prev; }
-    showError(failureLine(null, { ...DELETE, outcome }));
-    // Gone may be this delete's own earlier try whose answer was lost, which
-    // never reached the retraction below: it still runs (harmless twice).
-    if (outcome !== "removed") return;
+  const errEl = editor?.querySelector("#form-error");
+  // In the editor while it is still up (the page's own error line sits behind
+  // the overlay); on the page when the user has already left it.
+  const say = (msg) => {
+    if (errEl && modalEl === editor) { errEl.textContent = msg; errEl.hidden = false; }
+    else showError(msg);
+  };
+  if (errEl) { errEl.hidden = true; errEl.textContent = ""; }
+  const buttons = [...(editor?.querySelectorAll("button:not([data-cancel])") ?? [])];
+  if (editor) editor.dataset.saving = "yes";
+  buttons.forEach((b) => { b.disabled = true; });
+  try {
+    let res;
+    try { res = await db("DELETE FROM app_subscriptions__subscriptions WHERE id = ?", [id]); }
+    catch (e) { say(failText(e, DELETE)); return; }
+    // Nothing deleted: the re-read says why. No row: removed already. A row still there: the row policy refused
+    // this plain `WHERE id = ?` delete. A failed re-read says neither.
+    if (DB && !Number(res.changed)) {
+      let outcome = "";
+      try { await loadSubs(); render(); outcome = subs.some((s) => s.id === id) ? "refused" : "removed"; } catch { /* the list stays as it was */ }
+      say(failureLine(null, { ...DELETE, outcome }));
+      // Gone may be this delete's own earlier try whose answer was lost, which
+      // never reached the retraction below: it still runs (harmless twice).
+      if (outcome !== "removed") return;
+    } else {
+      // Confirmed: this editor closes, the row is dropped from the list, then
+      // re-read (a failed re-read keeps the list as drawn here).
+      if (editor && modalEl === editor) closeModal();
+      subs = subs.filter((s) => s.id !== id);
+      render();
+      await rereadAfterSave();
+    }
+    // After the DELETE commits, and not before: a retraction published for a row
+    // that then failed to delete would strand the subscription in the list with
+    // its calendar entry already gone.
+    if (doomed && wantsRenewalNudge(doomed)) await retractRenewalSafely(doomed, "deleted");
+  } finally {
+    if (editor) delete editor.dataset.saving;
+    buttons.forEach((b) => { b.disabled = false; });
   }
-  // After the DELETE commits, and not before: a retraction published for a row
-  // that then failed to delete would strand the subscription in the list with
-  // its calendar entry already gone.
-  if (doomed && wantsRenewalNudge(doomed)) await retractRenewalSafely(doomed, "deleted");
 }
 
 /** The pinned `updated_at` and new date of each renew action still awaiting
  *  its outcome, keyed by subscription id and the date it was renewed from. */
 const renewStamps = new Map();
 
+/** Subscriptions with a renew action awaiting the hub's answer. The button
+ *  stays on screen until then, so a second tap must not start another. */
+const renewing = new Set();
+
 /** Roll an overdue/current renewal forward one period (adults only). */
 async function markRenewed(id) {
+  if (renewing.has(id)) return;
+  renewing.add(id);
+  try { return await renewOnce(id); } finally { renewing.delete(id); }
+}
+
+async function renewOnce(id) {
   const idx = subs.findIndex((s) => s.id === id);
   if (idx === -1) return;
   const sub = subs[idx];
@@ -516,15 +565,12 @@ async function markRenewed(id) {
   renewStamps.set(pinKey, pin);
   const { now } = pin;
   let { nextDate } = pin;
-  const prev = sub;
   // last_reminded_at is cleared with the date it belonged to: the hub silences
   // a row whose stamp sits inside the current occurrence's window, and for a
   // weekly subscription the previous cycle's stamp does exactly that. The hub's
   // per-recipient send log still holds the old occurrence, so this can't
-  // resend it — see migration 003.
-  subs[idx] = { ...sub, next_renewal_date: nextDate, last_reminded_at: null, updated_at: now };
-  let renewed = subs[idx];
-  render();
+  // resend it — see migration 003. Nothing is drawn until the hub has answered.
+  let renewed = { ...sub, next_renewal_date: nextDate, last_reminded_at: null, updated_at: now };
   // Guarded on the date this page saw: when two adults tap at once, only the
   // first advances the date, and only that one books the charge below. `now`
   // is this action's pinned stamp: a re-read that finds it stored with the new
@@ -538,12 +584,13 @@ async function markRenewed(id) {
   } catch (e) { err = e; }
   // No answer, a 400 or a 5xx other than 507: the write may have been stored.
   const unknown = !!err && outcomeUnknown(err);
-  if (err && !unknown) { renewStamps.delete(pinKey); subs[idx] = prev; showError(failText(err, RENEW)); return; }
+  if (err && !unknown) { renewStamps.delete(pinKey); showError(failText(err, RENEW)); return; }
+  let reread = false;
   if (err || (DB && !Number(res.changed))) {
     if (err) console.error(err);
     let outcome = "";
     try { await loadSubs(); outcome = renewOutcome(subs.find((s) => s.id === id), { stamp: now, paidOn, nextDate }); }
-    catch { subs = subs.map((s) => (s.id === id ? prev : s)); }
+    catch { /* the list stays as it was */ }
     // Still unknown (a failed re-read, or a lost answer that left the date as
     // it was): the stamp stays pinned for the retry. Anything else is settled.
     if (!(outcome === "" || (outcome === "unchanged" && err))) renewStamps.delete(pinKey);
@@ -562,6 +609,11 @@ async function markRenewed(id) {
     // earlier try's, when a day boundary has moved the new date since).
     renewed = subs.find((s) => s.id === id);
     nextDate = renewed.next_renewal_date;
+    reread = true;
+    render();
+  } else {
+    // Confirmed: drawn from the saved values, re-read after the publishes.
+    subs = subs.map((s) => (s.id === id ? renewed : s));
     render();
   }
   renewStamps.delete(pinKey);
@@ -581,6 +633,7 @@ async function markRenewed(id) {
     });
   }
   await announceRenewalSafely(renewed);
+  if (!reread) await rereadAfterSave();
 }
 
 /* ── Rendering ─────────────────────────────────────────────────────────────── */
@@ -692,10 +745,10 @@ function openModal(html) {
   modalEl = document.createElement("div");
   modalEl.className = "overlay";
   modalEl.innerHTML = `<div class="modal">${html}</div>`;
-  modalEl.addEventListener("click", (e) => { if (e.target === modalEl && savingForm !== modalEl) closeModal(); });
+  modalEl.addEventListener("click", (e) => { if (e.target === modalEl) closeModal(); });
   document.body.appendChild(modalEl);
 }
-function closeModal() { if (savingForm === modalEl) savingForm = null; modalEl?.remove(); modalEl = null; }
+function closeModal() { modalEl?.remove(); modalEl = null; }
 
 /** The lead-time picker doubles as the on/off switch, so "warn me about this
  *  one" is a single decision: "No reminder" means remind = 0, any number is a
@@ -724,7 +777,6 @@ function leadNote() {
 }
 
 function openEditor(existing) {
-  if (savingForm) return; // a save is still out; its form stays until the write answers
   const s = existing ?? null;
   const scopeOptions = REMIND_SCOPES.map((r) => `<option value="${r.value}" ${(s?.remind_scope ?? "payer") === r.value ? "selected" : ""}>${esc(r.label)}</option>`).join("");
   const catOptions = CATEGORIES.map((c) => `<option value="${c.value}" ${s?.category === c.value ? "selected" : ""}>${c.label}</option>`).join("");
@@ -822,7 +874,7 @@ function openEditor(existing) {
   });
   modalEl.querySelector("#sub-form").addEventListener("submit", (e) => {
     e.preventDefault();
-    if (savingForm) return;
+    if (modalEl?.dataset.saving) return;
     const errEl = modalEl?.querySelector("#form-error");
     if (errEl) { errEl.hidden = true; errEl.textContent = ""; }
     const name = document.getElementById("f-name").value.trim();
@@ -833,12 +885,12 @@ function openEditor(existing) {
     const nextDate = document.getElementById("f-next").value;
     if (!nextDate) { document.getElementById("f-next").focus(); return; }
     // The form this save belongs to. It stays open, as typed, until the write
-    // has answered. Every button is off meanwhile (Cancel too, and the backdrop
-    // via `savingForm`): the list is not drawn ahead of the answer, so a form
-    // dismissed mid-save would look like nothing was saved and get typed again.
+    // has answered, with Save and Delete off. Cancel and the backdrop stay live:
+    // the save's answer then acts only on this form (closing it, or its error
+    // line) while it is still the open one, and otherwise goes to the page.
     const formModal = modalEl;
     const btn = formModal?.querySelector('button[type="submit"]');
-    const buttons = [...(formModal?.querySelectorAll("button") ?? [])];
+    const buttons = [...(formModal?.querySelectorAll("button:not([data-cancel])") ?? [])];
     const period = document.getElementById("f-period").value;
     const leadValue = document.getElementById("f-lead").value;
     const status = document.getElementById("f-status").value;
@@ -864,7 +916,7 @@ function openEditor(existing) {
       lead_days: clampLeadDays(leadValue === "off" ? (s?.lead_days ?? DEFAULT_LEAD_DAYS) : leadValue, period),
       remind_scope: document.getElementById("f-scope").value,
     };
-    savingForm = formModal;
+    formModal.dataset.saving = "yes";
     buttons.forEach((b) => { b.disabled = true; });
     if (btn) btn.textContent = "Saving…";
     saveSub(fields, s?.id ?? null).catch((err) => {
@@ -874,9 +926,7 @@ function openEditor(existing) {
       if (errEl && modalEl === formModal) { errEl.textContent = msg; errEl.hidden = false; }
       else showError(msg);
     }).finally(() => {
-      // Only this form's own lock: a saved form has already released it (in
-      // closeModal, before the publishes), and a later form may hold it by now.
-      if (savingForm === formModal) savingForm = null;
+      delete formModal.dataset.saving;
       buttons.forEach((b) => { b.disabled = false; });
       if (btn) btn.textContent = s ? "Save" : "Add";
       // Disabling the pressed button dropped focus to the page behind.
