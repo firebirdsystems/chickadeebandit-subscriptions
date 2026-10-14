@@ -168,9 +168,6 @@
     },
     "display": { "template": "list", "title": "title", "subtitle": "subtitle", "when": "renews_on", "owner": "payer" }
   },
-  "resource_limits": {
-    "max_db_bytes": 52428800
-  },
   "ai_access": {
     "allowed": true,
     "mode": "read",
